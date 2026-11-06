@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Download Manager
+Comment=Manage and accelerate your downloads
+Exec=downwell
+Icon=downwell
+Terminal=false
+Type=Application
+Categories=Network;FileTransfer;
+StartupNotify=true

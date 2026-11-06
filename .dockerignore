@@ -1,0 +1,9 @@
+.git
+.gocache
+frontend/node_modules
+frontend/.npm-cache
+frontend/dist
+build/bin
+dist
+*.db
+*.part
