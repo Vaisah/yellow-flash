@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -35,6 +36,24 @@ func TestValidateURL(t *testing.T) {
 		}
 		if err != nil && !errors.Is(err, ErrUnsafeURL) {
 			t.Errorf("ValidateURL(%q) error not wrapped: %v", raw, err)
+		}
+	}
+}
+
+func TestUnwrapLink(t *testing.T) {
+	img := "https://static0.xdaimages.com/wp/Valve-SteamDeck.jpg"
+	for in, want := range map[string]string{
+		"https://www.google.com/imgres?q=steamdeck&imgurl=" + url.QueryEscape(img) + "&w=1200": img,
+		"https://www.google.co.uk/url?sa=t&url=" + url.QueryEscape(img):                        img,
+		"https://l.facebook.com/l.php?u=" + url.QueryEscape(img) + "&h=AT0":                    img,
+		"https://www.youtube.com/redirect?event=video&q=" + url.QueryEscape(img):               img,
+		"https://www.google.com/imgres?imgurl=" + url.QueryEscape("javascript:alert(1)"):       "https://www.google.com/imgres?imgurl=" + url.QueryEscape("javascript:alert(1)"),
+		"https://example.com/imgres?imgurl=" + url.QueryEscape(img):                            "https://example.com/imgres?imgurl=" + url.QueryEscape(img),
+		"https://notgoogle.com/url?q=" + url.QueryEscape(img):                                  "https://notgoogle.com/url?q=" + url.QueryEscape(img),
+		"https://www.youtube.com/watch?v=abc":                                                  "https://www.youtube.com/watch?v=abc",
+	} {
+		if got := UnwrapLink(in); got != want {
+			t.Errorf("UnwrapLink(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
@@ -183,6 +202,25 @@ func TestProbeErrorStatuses(t *testing.T) {
 		if !errors.As(err, &se) || se.Code != code || se.RetryAfter != "7" {
 			t.Errorf("status %d: got %v", code, err)
 		}
+	}
+}
+
+// Regression: a HEAD reporting Content-Length: 0 followed by a chunked GET
+// (as served by e.g. video-site watch pages) must not be treated as empty.
+func TestProbeGETLengthOverridesBogusHEAD(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if r.Method == http.MethodHead {
+			w.Header().Set("Content-Length", "0")
+			return
+		}
+		_, _ = w.Write([]byte("<html>page</html>"))
+		w.(http.Flusher).Flush()
+	}))
+	defer srv.Close()
+	meta, err := NewProber(NewClient(Options{AllowPrivate: true})).Probe(context.Background(), srv.URL+"/watch?v=x", nil)
+	if err != nil || meta.Size != -1 || meta.RangeSupported || !strings.HasPrefix(meta.MIMEType, "text/html") {
+		t.Fatalf("meta=%+v err=%v", meta, err)
 	}
 }
 

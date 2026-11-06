@@ -2,7 +2,17 @@
 
 A cross-platform download manager for Windows and Linux. The Go download engine runs and is tested on its own. A Wails + React desktop shell exists, but it isn't part of the current phase. Browser integration comes in a later phase.
 
-**Status:** Phase 1 (the core download engine) is complete and verified. See [DEVELOPMENT_PROGRESS.md](DEVELOPMENT_PROGRESS.md) for test results and the remaining work.
+**Status:** Phase 1 (the engine) and Phase 2 (the Yellow Flash desktop app) are complete and verified. See [DEVELOPMENT_PROGRESS.md](DEVELOPMENT_PROGRESS.md) for test results and the remaining work.
+
+## Running the desktop app
+
+```sh
+go install github.com/wailsapp/wails/v2/cmd/wails@v2.15.0   # once
+wails dev        # hot-reload; also serves http://localhost:34115 for browser testing with the real backend
+wails build      # produces build/bin/Yellow Flash.exe (icon from build/appicon.png)
+```
+
+`cd frontend && npm run dev` runs the UI alone in a browser, using a simulated backend. That backend is dev-only and never bundled.
 
 ## What the engine does
 

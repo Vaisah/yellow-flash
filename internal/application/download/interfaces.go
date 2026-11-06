@@ -12,6 +12,7 @@ type DownloadPort interface {
 	Recover(ctx context.Context) error
 	Shutdown(ctx context.Context) error
 	Create(ctx context.Context, req domain.CreateRequest) (*domain.Download, error)
+	Inspect(ctx context.Context, url string, headers map[string]string) (*domain.LinkInfo, error)
 	Start(ctx context.Context, id string) error
 	Resume(ctx context.Context, id string) error
 	Pause(ctx context.Context, id string) error

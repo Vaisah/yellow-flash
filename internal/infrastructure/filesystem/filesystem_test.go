@@ -55,6 +55,23 @@ func TestFilenameHelpers(t *testing.T) {
 	}
 }
 
+func TestExtensionHelpers(t *testing.T) {
+	for ct, want := range map[string]string{
+		"video/mp4": ".mp4", "Video/WebM; codecs=vp9": ".webm", "text/html; charset=utf-8": ".html",
+		"application/octet-stream": "", "": "", "x/unknown": "",
+	} {
+		if got := ExtensionForMIME(ct); got != want {
+			t.Errorf("ExtensionForMIME(%q) = %q, want %q", ct, got, want)
+		}
+	}
+	if WithExtension("watch", ".mp4") != "watch.mp4" || WithExtension("clip.mkv", ".mp4") != "clip.mkv" || WithExtension("x", "") != "x" {
+		t.Error("WithExtension")
+	}
+	if !IsHTMLName("index.HTML") || IsHTMLName("watch") || IsHTMLName("video.mp4") {
+		t.Error("IsHTMLName")
+	}
+}
+
 func writeTemp(t *testing.T, dir, content string) string {
 	t.Helper()
 	p := filepath.Join(dir, "file.bin.part")

@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
-
 	"sync/atomic"
 	"testing"
 	"time"
@@ -173,8 +173,10 @@ func TestHTTP503(t *testing.T) {
 	e := newEnv(t, nil)
 	d := e.waitCompleted(e.add(fs.url("/files/503.bin"), "503.bin", 4))
 	e.assertFile(d, data)
-	if d.Retries < 3 {
-		t.Fatalf("retries=%d", d.Retries)
+	// Each 503 was either retried or handed to another connection; either
+	// way all three were absorbed and the file is intact.
+	if failures.Load() < 3 {
+		t.Fatalf("server failures=%d, expected the three 503s to be hit", failures.Load())
 	}
 	down := newFileServer(t, nil, func(fs *fileServer) {
 		fs.fail = func(*http.Request, int64) (int, string) { return http.StatusServiceUnavailable, "" }
@@ -740,5 +742,91 @@ func TestNoGoroutineLeaks(t *testing.T) {
 			t.Fatalf("goroutines: before=%d after=%d\n%s", before, runtime.NumGoroutine(), buf[:runtime.Stack(buf, true)])
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// A video site's watch page (HTML, often with a bogus HEAD length of 0) must
+// fail with a clear error instead of "completing" as an empty or HTML file.
+func TestWebPageLinkIsRejected(t *testing.T) {
+	fs := newFileServer(t, []byte("<!doctype html><title>video</title>"), func(fs *fileServer) {
+		fs.contentType, fs.unknownLength = "text/html; charset=utf-8", true
+	})
+	e := newEnv(t, nil)
+	d, err := e.svc.Add(context.Background(), domain.CreateRequest{URL: fs.url("/watch?v=abc123"), Directory: e.dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d = e.waitFailed(d.ID)
+	if !strings.Contains(d.Error, "web page") {
+		t.Fatalf("error: %s", d.Error)
+	}
+	if entries, _ := os.ReadDir(e.dir); len(entries) != 0 {
+		t.Fatalf("nothing should be written for a web page, found %d entries", len(entries))
+	}
+	// An explicitly requested .html file is still downloadable.
+	page := []byte("<html>saved page</html>")
+	html := newFileServer(t, page, func(fs *fileServer) { fs.contentType = "text/html" })
+	e.assertFile(e.waitCompleted(e.add(html.url("/docs/index.html"), "", 1)), page)
+}
+
+// Files served without an extension in the URL get one from Content-Type.
+func TestExtensionInferredFromContentType(t *testing.T) {
+	data := payload(128<<10, 30)
+	fs := newFileServer(t, data, func(fs *fileServer) { fs.contentType = "video/mp4" })
+	e := newEnv(t, nil)
+	d := e.waitCompleted(e.add(fs.url("/stream/watch"), "", 2))
+	if d.Filename != "watch.mp4" {
+		t.Fatalf("filename %q, want watch.mp4", d.Filename)
+	}
+	e.assertFile(d, data)
+	// An explicit filename is never changed.
+	d = e.waitCompleted(e.add(fs.url("/stream/watch"), "mine", 2))
+	if d.Filename != "mine" {
+		t.Fatalf("explicit filename changed to %q", d.Filename)
+	}
+}
+
+// Wrapped links (e.g. a Google image result) are unwrapped to the real file,
+// both for the Add dialog preview and for the download itself.
+func TestInspectAndUnwrapWrappedLink(t *testing.T) {
+	data := payload(96<<10, 31)
+	fs := newFileServer(t, data, func(fs *fileServer) { fs.contentType = "image/jpeg" })
+	e := newEnv(t, nil)
+	direct := fs.url("/images/Valve-SteamDeck")
+	wrapped := "https://www.google.com/imgres?q=steamdeck&imgurl=" + url.QueryEscape(direct) + "&w=1200"
+	info, err := e.svc.Inspect(context.Background(), wrapped, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.URL != direct || info.Filename != "Valve-SteamDeck.jpg" || info.Size != int64(len(data)) || !info.RangeSupported || info.WebPage {
+		t.Fatalf("inspect: %+v", info)
+	}
+	d := e.waitCompleted(e.add(wrapped, "", 4))
+	if d.URL != direct || d.Filename != "Valve-SteamDeck.jpg" {
+		t.Fatalf("download: url=%s name=%s", d.URL, d.Filename)
+	}
+	e.assertFile(d, data)
+	page := newFileServer(t, []byte("<html></html>"), func(fs *fileServer) { fs.contentType = "text/html" })
+	if info, err = e.svc.Inspect(context.Background(), page.url("/watch"), nil); err != nil || !info.WebPage {
+		t.Fatalf("web page not flagged: %+v %v", info, err)
+	}
+}
+
+// A server that allows only two simultaneous transfers answers the rest
+// with 429. The engine must shed connections and finish, not fail.
+func TestAdaptsToServerConnectionLimit(t *testing.T) {
+	data := payload(2<<20, 32)
+	fs := newFileServer(t, data, func(fs *fileServer) {
+		fs.maxActive = 2
+		fs.chunk, fs.delay = 16<<10, 2*time.Millisecond
+	})
+	e := newEnv(t, func(c *engine.Config) { c.Connections = 8 })
+	d := e.waitCompleted(e.add(fs.url("/files/limited.bin"), "limited.bin", 8))
+	e.assertFile(d, data)
+	if fs.throttled.Load() == 0 {
+		t.Fatal("server limit was never hit; test is not exercising adaptation")
+	}
+	if served := fs.bytesServed.Load(); served > int64(len(data))*3/2 {
+		t.Fatalf("segments restarted instead of being handed over: served %d of %d", served, len(data))
 	}
 }

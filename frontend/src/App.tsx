@@ -1,115 +1,330 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
-import { Activity, ArrowDownToLine, BadgeCheck, Check, CircleAlert, Clock3, FileArchive, FileAudio2, FileImage, FileText, FileVideo2, FolderOpen, Gauge, HardDriveDownload, LayoutDashboard, Pause, Play, Plus, Search, ShieldCheck, Trash2, X } from 'lucide-react'
-import type { Download, Status } from './types'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { DragEvent } from 'react'
+import { CheckCircle2, CircleAlert, Info, Plus, X } from 'lucide-react'
+import { backend, copyText, errorMessage } from './api'
+import { useDownloads } from './hooks/useDownloads'
+import { CATEGORIES, categoryOf } from './lib/categories'
+import type { Category } from './lib/categories'
+import { explainError } from './lib/errors'
+import { Sidebar, StatusBar, Toolbar } from './components/Chrome'
+import type { StatusFilter } from './components/Chrome'
+import { DownloadTable, sortRows } from './components/DownloadTable'
+import type { RowActions, Sort, SortKey } from './components/DownloadTable'
+import { DetailsPanel } from './components/DetailsPanel'
+import { AddUrlDialog, DeleteDialog, SettingsDialog } from './components/Dialogs'
+import { canCancel, canDelete, canPause, canResume, isActive } from './types'
+import type { AppInfo, Download, Settings } from './types'
+import logo from './assets/yellow-flash-256.png'
 
-type View = 'dashboard' | 'all' | 'active' | 'queued' | 'completed' | 'failed'
-const statusLabels: Record<Status, string> = { QUEUED: 'Queued', INITIALIZING: 'Starting', DOWNLOADING: 'Downloading', PAUSING: 'Pausing', PAUSED: 'Paused', VERIFYING: 'Finishing', COMPLETED: 'Completed', FAILED: 'Failed', CANCELLED: 'Cancelled' }
+type Dialog = { kind: 'add'; url: string } | { kind: 'settings' } | { kind: 'delete'; d: Download } | null
+interface Toast { id: number; kind: 'ok' | 'error' | 'info'; text: string }
 
-function formatBytes(value: number) {
-  if (value < 0) return 'Unknown size'
-  if (!value) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']; const index = Math.min(Math.floor(Math.log(value) / Math.log(1024)), units.length - 1)
-  return `${(value / 1024 ** index).toFixed(index === 0 ? 0 : 1)} ${units[index]}`
+const DEFAULT_SETTINGS: Settings = { downloadDirectory: '', connections: 8, startImmediately: true, useClipboard: true }
+
+function matchesStatus(d: Download, f: StatusFilter): boolean {
+  switch (f) {
+    case 'all': return true
+    case 'active': return isActive(d.status)
+    case 'waiting': return d.status === 'QUEUED' || d.status === 'PAUSED'
+    case 'completed': return d.status === 'COMPLETED'
+    case 'failed': return d.status === 'FAILED'
+  }
 }
-function fileIcon(name: string) {
-  const ext = name.split('.').pop()?.toLowerCase()
-  if (['mp4', 'mkv', 'mov', 'webm'].includes(ext ?? '')) return FileVideo2
-  if (['mp3', 'wav', 'flac', 'aac'].includes(ext ?? '')) return FileAudio2
-  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(ext ?? '')) return FileImage
-  if (['zip', '7z', 'rar', 'tar', 'gz'].includes(ext ?? '')) return FileArchive
-  return FileText
+
+function isTyping(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null
+  return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)
+}
+
+/** Error toasts keep the action but use the friendly explanation when one applies. */
+function explainToast(text: string): string {
+  const [action, ...rest] = text.split(': ')
+  const e = explainError(rest.join(': '))
+  return e.title === 'Download failed' ? text : `${action}: ${e.title}`
 }
 
 export default function App() {
-  const [items, setItems] = useState<Download[]>([])
-  const [view, setView] = useState<View>('dashboard')
+  const { items, progress, loaded, loadError, removeLocal, upsertLocal } = useDownloads()
+  const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS)
+  const [info, setInfo] = useState<AppInfo | null>(null)
+  const [category, setCategory] = useState<Category>('all')
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [search, setSearch] = useState('')
-  const [url, setUrl] = useState('')
-  const [filename, setFilename] = useState('')
-  const [destination, setDestination] = useState('')
-  const [adding, setAdding] = useState(false)
-  const [error, setError] = useState('')
+  const [sort, setSort] = useState<Sort>({ key: 'added', dir: 'desc' })
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [detailsOpen, setDetailsOpen] = useState(true)
+  const [dialog, setDialog] = useState<Dialog>(null)
+  const [toasts, setToasts] = useState<Toast[]>([])
+  const [dragging, setDragging] = useState(false)
+  const searchRef = useRef<HTMLInputElement>(null)
+  const toastId = useRef(0)
 
-  const refresh = async () => { try { setItems(await window.go.main.App.ListDownloads()) } catch { /* Wails bridge becomes available after startup. */ } }
-  useEffect(() => {
-    void refresh()
-    const timer = window.setInterval(() => void refresh(), 1800)
-    const off = window.runtime?.EventsOn('downloads:updated', item => setItems(current => { const found = current.some(row => row.id === item.id); return found ? current.map(row => row.id === item.id ? item : row) : [item, ...current] }))
-    return () => { window.clearInterval(timer); off?.() }
+  const toast = useCallback((kind: Toast['kind'], text: string) => {
+    const id = ++toastId.current
+    setToasts((t) => [...t.slice(-3), { id, kind, text }])
+    window.setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), kind === 'error' ? 7000 : 3500)
   }, [])
 
-  const counts = useMemo(() => ({ active: items.filter(d => ['DOWNLOADING', 'INITIALIZING', 'VERIFYING'].includes(d.status)).length, queued: items.filter(d => d.status === 'QUEUED').length, completed: items.filter(d => d.status === 'COMPLETED').length, failed: items.filter(d => d.status === 'FAILED').length }), [items])
-  const filtered = useMemo(() => {
-    const query = search.trim().toLowerCase()
-    return items.filter(d => {
-      const matchesView = view === 'all' || view === 'dashboard' || (view === 'active' && ['DOWNLOADING', 'INITIALIZING', 'VERIFYING', 'PAUSED', 'PAUSING'].includes(d.status)) || (view === 'queued' && d.status === 'QUEUED') || (view === 'completed' && d.status === 'COMPLETED') || (view === 'failed' && ['FAILED', 'CANCELLED'].includes(d.status))
-      return matchesView && (!query || `${d.filename} ${d.url}`.toLowerCase().includes(query))
-    }).sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
-  }, [items, search, view])
+  useEffect(() => {
+    backend().GetSettings().then(setSettings).catch((e) => toast('error', `Could not load settings: ${errorMessage(e)}`))
+    backend().Info().then(setInfo).catch(() => undefined)
+  }, [toast])
 
-  const submit = async (event: FormEvent) => {
-    event.preventDefault(); if (!url.trim()) return
-    setAdding(true); setError('')
-    try { await window.go.main.App.AddDownload(url.trim(), destination.trim(), filename.trim()); setUrl(''); setFilename(''); await refresh() }
-    catch (e) { setError(String(e)); }
-    finally { setAdding(false) }
+  /* ---------- derived lists ---------- */
+
+  const statusCounts = useMemo(() => {
+    const c: Record<StatusFilter, number> = { all: 0, active: 0, waiting: 0, completed: 0, failed: 0 }
+    for (const d of items) for (const f of Object.keys(c) as StatusFilter[]) if (matchesStatus(d, f)) c[f]++
+    return c
+  }, [items])
+
+  const categoryCounts = useMemo(() => {
+    const c = Object.fromEntries(CATEGORIES.map((x) => [x.id, 0])) as Record<Category, number>
+    for (const d of items) {
+      c.all++
+      c[categoryOf(d.filename)]++
+    }
+    return c
+  }, [items])
+
+  const rows = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    const filtered = items.filter((d) =>
+      matchesStatus(d, statusFilter) &&
+      (category === 'all' || categoryOf(d.filename) === category) &&
+      (q === '' || d.filename.toLowerCase().includes(q) || d.url.toLowerCase().includes(q)))
+    return sortRows(filtered, progress, sort)
+  }, [items, progress, statusFilter, category, search, sort])
+
+  const selected = items.find((d) => d.id === selectedId) ?? null
+  const totalSpeed = Object.values(progress).reduce((sum, p) => sum + (p.speed > 0 ? p.speed : 0), 0)
+
+  /* ---------- actions ---------- */
+
+  const call = useCallback(async (fn: () => Promise<void>, failure: string) => {
+    try {
+      await fn()
+    } catch (e) {
+      toast('error', `${failure}: ${errorMessage(e)}`)
+    }
+  }, [toast])
+
+  const actions: RowActions = useMemo(() => ({
+    resume: (d) => void call(() => backend().ResumeDownload(d.id), 'Could not resume'),
+    pause: (d) => void call(() => backend().PauseDownload(d.id), 'Could not pause'),
+    cancel: (d) => void call(() => backend().CancelDownload(d.id), 'Could not cancel'),
+    retry: (d) => void call(() => backend().RetryDownload(d.id), 'Could not retry'),
+    remove: (d) => setDialog({ kind: 'delete', d }),
+    openFile: (d) => void call(() => backend().OpenFile(d.id), 'Could not open the file'),
+    showInFolder: (d) => void call(() => backend().ShowInFolder(d.id), 'Could not open the folder'),
+    copyLink: (d) => void call(async () => { await copyText(d.url); toast('info', 'Link copied') }, 'Could not copy'),
+  }), [call, toast])
+
+  const openAdd = useCallback(async (prefill?: string) => {
+    let url = prefill ?? ''
+    if (!url && settings.useClipboard) url = await backend().ClipboardURL().catch(() => '')
+    setDialog({ kind: 'add', url })
+  }, [settings.useClipboard])
+
+  const activate = useCallback((d: Download) => {
+    if (d.status === 'COMPLETED') actions.openFile(d)
+    else if (canResume(d.status)) actions.resume(d)
+    else setDetailsOpen(true)
+  }, [actions])
+
+  const toggle = useCallback((d: Download) => {
+    if (canPause(d.status)) actions.pause(d)
+    else if (canResume(d.status)) actions.resume(d)
+  }, [actions])
+
+  const onSort = (key: SortKey) =>
+    setSort((s) => (s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: key === 'name' ? 'asc' : 'desc' }))
+
+  /* ---------- keyboard and drag & drop ---------- */
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (dialog) return
+      const ctrl = e.ctrlKey || e.metaKey
+      if ((ctrl && e.key.toLowerCase() === 'n') || e.key === 'Insert') {
+        e.preventDefault()
+        void openAdd()
+        return
+      }
+      if (ctrl && e.key.toLowerCase() === 'f') {
+        e.preventDefault()
+        searchRef.current?.focus()
+        return
+      }
+      if (isTyping(e.target)) return
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault()
+        if (rows.length === 0) return
+        const i = rows.findIndex((d) => d.id === selectedId)
+        const next = e.key === 'ArrowDown' ? Math.min(rows.length - 1, i + 1) : Math.max(0, i < 0 ? 0 : i - 1)
+        setSelectedId(rows[next].id)
+        return
+      }
+      if (!selected) return
+      if (e.key === 'Delete' && canDelete(selected.status)) actions.remove(selected)
+      else if (e.key === ' ') {
+        e.preventDefault()
+        toggle(selected)
+      } else if (e.key === 'Enter') activate(selected)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [dialog, rows, selected, selectedId, actions, toggle, activate, openAdd])
+
+  useEffect(() => {
+    if (selectedId) document.querySelector<HTMLElement>('tr.selected')?.scrollIntoView({ block: 'nearest' })
+  }, [selectedId])
+
+  const onDrop = (e: DragEvent) => {
+    e.preventDefault()
+    setDragging(false)
+    const text = (e.dataTransfer.getData('text/uri-list') || e.dataTransfer.getData('text/plain'))
+      .split(/\s+/).find((s) => /^https?:\/\//i.test(s))
+    if (text) void openAdd(text)
   }
-  const chooseFolder = async () => { try { const path = await window.go.main.App.SelectDirectory(); if (path) setDestination(path) } catch (e) { setError(String(e)) } }
-  const action = async (id: string, task: 'pause' | 'resume' | 'cancel') => {
-    try { const api = window.go.main.App; if (task === 'pause') await api.PauseDownload(id); else if (task === 'resume') await api.ResumeDownload(id); else await api.CancelDownload(id); await refresh() }
-    catch (e) { setError(String(e)) }
-  }
 
-  const nav: { id: View; label: string; icon: typeof LayoutDashboard; count?: number }[] = [
-    { id: 'dashboard', label: 'Overview', icon: LayoutDashboard }, { id: 'all', label: 'All downloads', icon: HardDriveDownload, count: items.length },
-    { id: 'active', label: 'In progress', icon: Activity, count: counts.active }, { id: 'queued', label: 'Queued', icon: Clock3, count: counts.queued },
-    { id: 'completed', label: 'Completed', icon: BadgeCheck, count: counts.completed }, { id: 'failed', label: 'Attention', icon: CircleAlert, count: counts.failed },
-  ]
-  const heading = view === 'dashboard' ? 'Overview' : nav.find(item => item.id === view)?.label ?? 'Downloads'
+  /* ---------- render ---------- */
 
-  return <div className="app-shell">
-    <aside className="sidebar">
-      <div className="brand"><div className="brand-mark"><ArrowDownToLine size={19} strokeWidth={2.5} /></div><div><strong>Downwell</strong><span>DOWNLOAD MANAGER</span></div></div>
-      <div className="nav-caption">LIBRARY</div>
-      <nav>{nav.map(item => <button key={item.id} className={`nav-item ${view === item.id ? 'selected' : ''}`} onClick={() => setView(item.id)}><item.icon size={17} /><span>{item.label}</span>{item.count !== undefined && <small>{item.count}</small>}</button>)}</nav>
-      <div className="sidebar-bottom"><div className="security-card"><div className="security-icon"><ShieldCheck size={16} /></div><div><strong>Private by design</strong><span>Downloads stay on this device</span></div><Check size={14} className="security-check" /></div><div className="connection"><span className="connection-dot" /> Engine ready <span className="version">v0.1</span></div></div>
-    </aside>
+  const hasItems = items.length > 0
+  return (
+    <div
+      className={`app ${dragging ? 'dragging' : ''}`}
+      onDragOver={(e) => { e.preventDefault(); setDragging(true) }}
+      onDragLeave={(e) => { if (e.currentTarget === e.target) setDragging(false) }}
+      onDrop={onDrop}
+    >
+      <Toolbar
+        can={{
+          resume: !!selected && canResume(selected.status),
+          pause: !!selected && canPause(selected.status),
+          cancel: !!selected && canCancel(selected.status),
+          retry: selected?.status === 'FAILED',
+          remove: !!selected && canDelete(selected.status),
+        }}
+        onAdd={() => void openAdd()}
+        onResume={() => selected && actions.resume(selected)}
+        onPause={() => selected && actions.pause(selected)}
+        onCancel={() => selected && actions.cancel(selected)}
+        onRetry={() => selected && actions.retry(selected)}
+        onRemove={() => selected && actions.remove(selected)}
+        onResumeAll={() => void call(() => backend().ResumeAll(), 'Could not resume all')}
+        onPauseAll={() => void call(() => backend().PauseAll(), 'Could not pause all')}
+        onOpenFolder={() => void call(() => backend().OpenFolder(settings.downloadDirectory), 'Could not open the folder')}
+        onSettings={() => setDialog({ kind: 'settings' })}
+        search={search}
+        onSearch={setSearch}
+        searchRef={searchRef}
+      />
 
-    <main className="main-area">
-      <header className="topbar"><div className="breadcrumbs"><span>Workspace</span><span className="crumb-slash">/</span><strong>{heading}</strong></div><div className="top-actions"><div className="engine-pill"><span /> Engine online</div><div className="avatar">D</div></div></header>
-      <div className="content">
-        <div className="page-heading"><div><div className="eyebrow">YOUR DOWNLOAD SPACE</div><h1>{heading}</h1><p>Everything you download, organized in one place.</p></div><div className="date-chip"><Activity size={15} /> Live activity</div></div>
-
-        <form className="capture-card" onSubmit={submit}>
-          <div className="capture-head"><div className="capture-icon"><Plus size={17} /></div><div><strong>Start a new download</strong><span>Paste a file link to add it to your queue</span></div><div className="secure-tag">HTTP / HTTPS</div></div>
-          <div className="capture-controls"><div className="url-wrap"><ArrowDownToLine size={17} /><input value={url} onChange={e => setUrl(e.target.value)} placeholder="Paste a download link (https://...)" type="url" required /></div><button className="primary-button" disabled={adding || !url.trim()}>{adding ? <span className="spinner" /> : <><span>Download</span><ArrowDownToLine size={16} /></>}</button></div>
-          <div className="capture-options"><input value={filename} onChange={e => setFilename(e.target.value)} placeholder="File name (optional)" /><div className="destination-picker"><FolderOpen size={15} /><input value={destination} onChange={e => setDestination(e.target.value)} placeholder="Choose download folder" /><button type="button" onClick={chooseFolder}>Browse</button></div></div>
-          {error && <div className="error-line"><CircleAlert size={14} />{error}<button type="button" onClick={() => setError('')}><X size={14} /></button></div>}
-        </form>
-
-        {view === 'dashboard' && <section className="stats-grid">
-          <div className="stat-card stat-active"><div className="stat-top"><span>IN PROGRESS</span><div><Activity size={16} /></div></div><strong>{counts.active}</strong><small>Transfers running now</small></div>
-          <div className="stat-card"><div className="stat-top"><span>WAITING IN QUEUE</span><div><Clock3 size={16} /></div></div><strong>{counts.queued}</strong><small>Ready when you are</small></div>
-          <div className="stat-card"><div className="stat-top"><span>COMPLETED</span><div><BadgeCheck size={16} /></div></div><strong>{counts.completed}</strong><small>Files downloaded</small></div>
-          <div className="stat-card"><div className="stat-top"><span>CONNECTIONS</span><div><Gauge size={16} /></div></div><strong>{items.filter(d => d.status === 'DOWNLOADING').reduce((sum,d) => sum + d.connections,0)}</strong><small>Active file segments</small></div>
-        </section>}
-
-        <section className="downloads-section">
-          <div className="section-heading"><div><div className="section-title">{view === 'dashboard' ? 'Recent downloads' : 'Downloads'} <span className="total-count">{filtered.length}</span></div><p>{view === 'dashboard' ? 'Your latest file activity at a glance.' : `Browse and manage ${heading.toLowerCase()}.`}</p></div><div className="list-tools"><div className="search-box"><Search size={15} /><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search files" /></div></div></div>
-          <div className="download-table"><div className="table-header"><span>FILE</span><span>STATUS</span><span>SIZE</span><span>ADDED</span><span></span></div>
-            {filtered.length === 0 ? <div className="empty-state"><div className="empty-icon"><ArrowDownToLine size={21} /></div><strong>{search ? 'No matching downloads' : 'Your list is clear'}</strong><span>{search ? 'Try another file name or link.' : 'Add a file link above and it will show up here.'}</span></div> : filtered.slice(0, view === 'dashboard' ? 6 : undefined).map(item => {
-              const Icon = fileIcon(item.filename); const progress = item.size > 0 ? Math.min(100, item.downloaded / item.size * 100) : 0
-              return <div className="download-row" key={item.id}><div className="file-cell"><div className={`file-icon ${item.status === 'COMPLETED' ? 'file-done' : ''}`}><Icon size={18} /></div><div className="file-meta"><strong title={item.filename}>{item.filename}</strong><span title={item.url}>{item.url.replace(/^https?:\/\//, '').split('/')[0]}</span>{['DOWNLOADING','INITIALIZING','VERIFYING'].includes(item.status) && <div className="progress-track"><div style={{width: `${progress}%`}} /></div>}</div></div>
-                <div className="status-cell"><span className={`status-badge status-${item.status.toLowerCase()}`}><i />{statusLabels[item.status]}</span>{item.status === 'DOWNLOADING' && <small>{progress.toFixed(0)}%</small>}{item.status === 'FAILED' && <span className="error-tip" title={item.error}><CircleAlert size={13} /></span>}</div>
-                <div className="size-cell"><strong>{formatBytes(item.downloaded)}{item.size > 0 && item.status !== 'COMPLETED' ? <span> / {formatBytes(item.size)}</span> : ''}</strong></div><div className="date-cell">{new Date(item.createdAt).toLocaleDateString(undefined,{month:'short',day:'numeric'})}</div>
-                <div className="row-actions">{item.status === 'DOWNLOADING' || item.status === 'INITIALIZING' ? <button title="Pause" onClick={() => void action(item.id,'pause')}><Pause size={15}/></button> : ['PAUSED','FAILED','QUEUED'].includes(item.status) ? <button title="Resume" onClick={() => void action(item.id,'resume')}><Play size={15}/></button> : null}{!['COMPLETED','CANCELLED'].includes(item.status) && <button title="Cancel" onClick={() => void action(item.id,'cancel')}><Trash2 size={15}/></button>}</div>
-              </div>
-            })}
-          </div>
-          {view === 'dashboard' && items.length > 6 && <button className="view-all" onClick={() => setView('all')}>View all downloads <span>→</span></button>}
-        </section>
-        <footer className="footer"><span>DOWNWELL DESKTOP</span><span>Built for files that get there.</span><span className="footer-right"><ShieldCheck size={13}/> Local-first transfers</span></footer>
+      <div className="body">
+        <Sidebar
+          category={category}
+          status={statusFilter}
+          categoryCounts={categoryCounts}
+          statusCounts={statusCounts}
+          onCategory={setCategory}
+          onStatus={setStatusFilter}
+        />
+        <main className="main">
+          {loadError && <div className="banner" role="alert"><CircleAlert size={16} /> Could not load downloads: {loadError}</div>}
+          {loaded && !hasItems ? (
+            <div className="empty">
+              <img src={logo} alt="Yellow Flash" width={180} height={180} />
+              <h1>Fast, resumable downloads</h1>
+              <p>Paste a direct file link to get started. Files are split across several connections and can be paused, resumed and recovered after a crash.</p>
+              <button className="btn btn-primary btn-lg" onClick={() => void openAdd()}><Plus size={18} /> Add URL</button>
+              <small>Tip: press <kbd>Ctrl</kbd> + <kbd>N</kbd>, or drop a link anywhere in this window.</small>
+            </div>
+          ) : (
+            <>
+              {rows.length === 0 && hasItems ? (
+                <div className="empty small"><p>No downloads match the current filter.</p></div>
+              ) : (
+                <DownloadTable
+                  rows={rows}
+                  progress={progress}
+                  selectedId={selectedId}
+                  sort={sort}
+                  onSort={onSort}
+                  onSelect={(id) => { setSelectedId(id); setDetailsOpen(true) }}
+                  onActivate={activate}
+                  actions={actions}
+                />
+              )}
+              {selected && detailsOpen && (
+                <DetailsPanel
+                  download={selected}
+                  progress={progress[selected.id]}
+                  onCollapse={() => setDetailsOpen(false)}
+                  onOpenFile={actions.openFile}
+                  onShowInFolder={actions.showInFolder}
+                  onCopyLink={actions.copyLink}
+                />
+              )}
+            </>
+          )}
+        </main>
       </div>
-    </main>
-  </div>
+
+      <StatusBar
+        totalSpeed={totalSpeed}
+        active={statusCounts.active}
+        waiting={statusCounts.waiting}
+        completed={statusCounts.completed}
+        total={items.length}
+        connected={!loadError}
+      />
+
+      {dialog?.kind === 'add' && (
+        <AddUrlDialog
+          initialUrl={dialog.url}
+          settings={settings}
+          onClose={() => setDialog(null)}
+          onAdded={(d, started) => {
+            upsertLocal(d)
+            setSelectedId(d.id)
+            setDetailsOpen(true)
+            setDialog(null)
+            toast('ok', started ? `Downloading ${d.filename}` : `Added ${d.filename} (not started)`)
+          }}
+        />
+      )}
+      {dialog?.kind === 'settings' && (
+        <SettingsDialog
+          settings={settings}
+          info={info}
+          onClose={() => setDialog(null)}
+          onSaved={(s) => { setSettings(s); setDialog(null); toast('ok', 'Settings saved') }}
+        />
+      )}
+      {dialog?.kind === 'delete' && (
+        <DeleteDialog
+          download={dialog.d}
+          onClose={() => setDialog(null)}
+          onDeleted={(id) => {
+            removeLocal(id)
+            if (selectedId === id) setSelectedId(null)
+            setDialog(null)
+            toast('info', 'Download removed')
+          }}
+        />
+      )}
+
+      <div className="toasts" aria-live="polite">
+        {toasts.map((t) => (
+          <div key={t.id} className={`toast toast-${t.kind}`}>
+            {t.kind === 'ok' ? <CheckCircle2 size={16} /> : t.kind === 'error' ? <CircleAlert size={16} /> : <Info size={16} />}
+            <span>{t.kind === 'error' ? explainToast(t.text) : t.text}</span>
+            <button className="icon-btn" aria-label="Dismiss" onClick={() => setToasts((all) => all.filter((x) => x.id !== t.id))}><X size={14} /></button>
+          </div>
+        ))}
+      </div>
+      {dragging && <div className="drop-hint">Drop the link to add it</div>}
+    </div>
+  )
 }

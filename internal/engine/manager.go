@@ -184,7 +184,7 @@ func (m *Manager) Create(ctx context.Context, req domain.CreateRequest) (*domain
 	if stopping {
 		return nil, domain.ErrShuttingDown
 	}
-	u, err := network.ValidateURL(req.URL)
+	u, err := network.ValidateURL(network.UnwrapLink(req.URL))
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", domain.ErrInvalidRequest, err)
 	}
@@ -248,6 +248,40 @@ func (m *Manager) Create(ctx context.Context, req domain.CreateRequest) (*domain
 	}
 	m.emitChanged(d.ID)
 	return snap, nil
+}
+
+// Inspect probes a link without creating a download, returning the name the
+// download would get, its size and type, and whether it is a web page.
+func (m *Manager) Inspect(ctx context.Context, rawURL string, headers map[string]string) (*domain.LinkInfo, error) {
+	u, err := network.ValidateURL(network.UnwrapLink(rawURL))
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", domain.ErrInvalidRequest, err)
+	}
+	public, secret, err := splitHeaders(headers)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	meta, err := m.cfg.Prober.Probe(ctx, u.String(), buildHeaders(public, secret))
+	if err != nil {
+		return nil, err
+	}
+	raw := meta.Filename
+	if raw == "" {
+		raw = filesystem.FilenameFromURL(u)
+	}
+	name, err := filesystem.SanitizeFilename(raw)
+	if err != nil {
+		name = "download"
+	}
+	// Decide "web page" on the name as linked, before an extension is
+	// inferred from the content type (which would turn "watch" into
+	// "watch.html" and hide the problem).
+	webPage := isWebPage(meta.MIMEType) && !filesystem.IsHTMLName(name)
+	name = filesystem.WithExtension(name, filesystem.ExtensionForMIME(meta.MIMEType))
+	return &domain.LinkInfo{URL: u.String(), FinalURL: meta.URL, Filename: name, Size: meta.Size, MIMEType: meta.MIMEType,
+		RangeSupported: meta.RangeSupported, WebPage: webPage}, nil
 }
 
 func (m *Manager) forget(id string) {
@@ -615,6 +649,13 @@ func (m *Manager) recordRetry(e *entry) {
 // policy, or ctx ends. The attempt counter resets whenever op made
 // progress, so long transfers survive occasional transient failures.
 func (m *Manager) withRetry(ctx context.Context, e *entry, onRetry func(), op func() (progressed bool, err error)) error {
+	return m.withRetryYield(ctx, e, onRetry, nil, op)
+}
+
+// withRetryYield is withRetry with an optional yield hook: when it returns
+// true for a failure, retrying stops and errYielded is returned so the
+// caller can hand the work to someone else.
+func (m *Manager) withRetryYield(ctx context.Context, e *entry, onRetry func(), yield func(Classification) bool, op func() (progressed bool, err error)) error {
 	attempt, total := 0, 0
 	for {
 		progressed, err := op()
@@ -628,13 +669,16 @@ func (m *Manager) withRetry(ctx context.Context, e *entry, onRetry func(), op fu
 			attempt = 0
 		}
 		c := Classify(err)
+		if yield != nil && yield(c) {
+			return fmt.Errorf("%w: %w", errYielded, err)
+		}
 		if !m.retry.ShouldRetry(attempt, c) {
 			if total > 0 {
 				return fmt.Errorf("%w (gave up after %d retries)", err, total)
 			}
 			return err
 		}
-		m.cfg.Logger.Debug("retrying", "kind", c.Kind, "status", c.StatusCode, "attempt", attempt+1)
+		m.cfg.Logger.Debug("retrying", "kind", c.Kind, "status", c.StatusCode, "attempt", attempt+1, "err", err.Error())
 		m.recordRetry(e)
 		if onRetry != nil {
 			onRetry()

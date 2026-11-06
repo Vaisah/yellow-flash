@@ -40,6 +40,9 @@ func (f *fakePort) Start(_ context.Context, id string) error {
 	f.items[id].Status = domain.Downloading
 	return nil
 }
+func (f *fakePort) Inspect(_ context.Context, url string, _ map[string]string) (*domain.LinkInfo, error) {
+	return &domain.LinkInfo{URL: url, Filename: "file.bin", Size: -1}, nil
+}
 func (f *fakePort) Resume(_ context.Context, id string) error { return f.record("resume", id) }
 func (f *fakePort) Pause(_ context.Context, id string) error  { return f.record("pause", id) }
 func (f *fakePort) Cancel(_ context.Context, id string) error { return f.record("cancel", id) }
@@ -115,5 +118,14 @@ func TestListByStatusAndPauseAll(t *testing.T) {
 	}
 	if len(port.calls) != 2 {
 		t.Fatalf("pause calls: %v", port.calls)
+	}
+	port.items["p"] = &domain.Download{ID: "p", Status: domain.Paused}
+	port.items["q"] = &domain.Download{ID: "q", Status: domain.Queued}
+	port.calls = nil
+	if err = s.ResumeAll(context.Background()); err != nil || len(port.calls) != 2 {
+		t.Fatalf("resume all: %v %v", port.calls, err)
+	}
+	if _, err = s.Inspect(context.Background(), " ", nil); !errors.Is(err, domain.ErrInvalidRequest) {
+		t.Fatal("empty inspect URL accepted")
 	}
 }

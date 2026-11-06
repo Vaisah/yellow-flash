@@ -74,9 +74,10 @@ func (p *Prober) Probe(ctx context.Context, rawURL string, headers http.Header) 
 		}
 	case http.StatusOK:
 		applyHeaders(&meta, res.Header, true)
-		if res.ContentLength >= 0 {
-			meta.Size = res.ContentLength
-		}
+		// The GET describes what will actually be transferred, so its length
+		// wins, including "unknown" (-1). Some servers answer HEAD with a
+		// bogus Content-Length: 0 and then stream a chunked body.
+		meta.Size = res.ContentLength
 	case http.StatusRequestedRangeNotSatisfiable:
 		// An empty resource cannot satisfy bytes=0-0.
 		if total, ok := ParseUnsatisfiedRange(res.Header.Get("Content-Range")); ok && total == 0 {

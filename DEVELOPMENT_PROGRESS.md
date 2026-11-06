@@ -2,7 +2,43 @@
 
 ## Current phase
 
-**Phase 1 (core Go download engine) is complete.** Every item in the Phase 1 definition of done is backed by passing tests, listed below. The next phase is Phase 2, the desktop application.
+**Phase 2 (desktop application, branded Yellow Flash) is complete.** Phase 1 (the core engine) is complete, and it gained two fixes during Phase 2 testing, listed below. The next phase is Phase 3, download management.
+
+## Phase 2: Yellow Flash desktop app (2026-11-06)
+
+The layout follows a classic download manager without copying IDM: a toolbar, a status and category sidebar, a sortable download table, a details panel with a live segment map, a status bar with total speed, and dialogs for Add URL, Settings and Remove.
+
+| Feature | Where |
+|---|---|
+| Add URL dialog that previews the file before downloading (name, size, type, resume support), pre-fills from the clipboard, and blocks web pages with an explanation | `frontend/src/components/Dialogs.tsx`, `App.InspectLink`, `Manager.Inspect` |
+| Google, Facebook and YouTube redirect links unwrapped to the real file | `network/unwrap.go` |
+| Live speed, ETA and active connections; segment map | `DownloadTable.tsx`, `DetailsPanel.tsx`, `App.GetSegments` |
+| Pause, resume, cancel, retry and remove (optionally deleting the file); Resume all and Pause all | `App.*`, `Service.ResumeAll/PauseAll` |
+| Open file and Show in folder, behind the platform interface (Windows: rundll32/explorer, Linux: xdg-open) | `internal/platform/shell*.go` |
+| Plain-language error explanations (403, 404, 429, web page, timeouts, and others) | `frontend/src/lib/errors.ts` |
+| Settings persisted in SQLite (folder, connections, auto-start, clipboard) | `App.GetSettings/SaveSettings` |
+| Keyboard shortcuts (Ctrl+N, Ctrl+F, Space, Delete, Enter, arrow keys), right-click menu, drag-and-drop of links | `App.tsx`, `DownloadTable.tsx` |
+| Branding: logo in the UI, favicon and `.exe` icon (`build/appicon.png`); data folder `%APPDATA%\Yellow Flash`, migrated from the old "Download Manager" folder | `app.go`, `main.go`, `wails.json` |
+
+**Engine fixes found while testing against real servers:**
+- **Bogus HEAD length.** YouTube answers HEAD with `Content-Length: 0` and then streams HTML, so watch pages "completed" as empty files. The GET's length now wins, and HTML responses are rejected with `ErrWebPage`. Downloads without an extension get one from the Content-Type.
+- **Server connection limits.** Hetzner answered 8 connections with 429, and one segment exhausting its retries failed the whole download. Throttled workers (429 or 503) now hand their segment back and stop while other workers are alive, so concurrency adapts to what the server allows. Integration test: `TestAdaptsToServerConnectionLimit`.
+
+**Testing:**
+- The UI was checked in Chrome against a dev-only mock backend (`src/dev/mockBackend.ts`, excluded from production builds).
+- It was then driven end to end through `wails dev` against the real Go backend:
+  - Inspected and downloaded a real 100 MB file. The server throttled it, and the engine adapted from 8 to 2 connections.
+  - Paused and resumed the download, which continued from 64 MB.
+  - The final file was exactly 104,857,600 bytes, and 6 of 6 byte ranges matched fresh server reads.
+- `go test ./...` passes, and `go test -race` passes on Linux (Docker, 2 runs).
+- `wails build` produces `build/bin/Yellow Flash.exe`.
+
+**Known limitations:**
+- Video-site pages (YouTube) cannot be downloaded until media capture arrives with the browser extension (Phase 4).
+- When a server limits connections, the limit is relearned on every resume rather than remembered per host.
+- Some public test servers (for example proof.ovh.net) block an IP after heavy multi-connection use.
+
+## Phase 1 summary
 
 ## Completed milestones (Phase 1)
 
@@ -101,4 +137,8 @@ The host has no cgo or gcc, so `-race` cannot run natively on Windows; it runs o
 
 ## Next recommended task
 
-Start Phase 2: bind the Wails `App` to `DownloadService`, including `Resume`, `ListByStatus`, `PauseAll`, and `CreateRequest` headers. Then build the dashboard and list views from the `downloads:updated` and `downloads:progress` events.
+Start Phase 3, download management:
+- Queues with a maximum number of simultaneous downloads.
+- Dynamic segment splitting, so idle connections take over the remainder of slow segments.
+- A per-host connection limit learned from 429 responses.
+- Bandwidth throttling and a scheduler.

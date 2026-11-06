@@ -1,16 +1,37 @@
-import type { Download } from './types'
+import type { AddRequest, AppInfo, Download, LinkInfo, Segment, Settings } from './types'
+
+/** Bindings injected by the Wails runtime for the Go App struct. */
+export interface AppBindings {
+  Info(): Promise<AppInfo>
+  ListDownloads(): Promise<Download[]>
+  GetDownload(id: string): Promise<Download>
+  InspectLink(url: string): Promise<LinkInfo>
+  AddDownload(req: AddRequest): Promise<Download>
+  ResumeDownload(id: string): Promise<void>
+  PauseDownload(id: string): Promise<void>
+  CancelDownload(id: string): Promise<void>
+  RetryDownload(id: string): Promise<void>
+  DeleteDownload(id: string, deleteFile: boolean): Promise<void>
+  PauseAll(): Promise<void>
+  ResumeAll(): Promise<void>
+  GetSegments(id: string): Promise<Segment[]>
+  OpenFile(id: string): Promise<void>
+  ShowInFolder(id: string): Promise<void>
+  OpenFolder(dir: string): Promise<void>
+  SelectDirectory(): Promise<string>
+  ClipboardURL(): Promise<string>
+  GetSettings(): Promise<Settings>
+  SaveSettings(s: Settings): Promise<Settings>
+}
 
 declare global {
   interface Window {
-    go: { main: { App: {
-      ListDownloads(): Promise<Download[]>
-      AddDownload(url: string, destination: string, filename: string): Promise<Download>
-      PauseDownload(id: string): Promise<void>
-      ResumeDownload(id: string): Promise<void>
-      CancelDownload(id: string): Promise<void>
-      SelectDirectory(): Promise<string>
-    } } }
-    runtime?: { EventsOn(event: string, callback: (download: Download) => void): () => void }
+    go?: { main: { App: AppBindings } }
+    runtime?: {
+      EventsOn(event: string, callback: (...data: any[]) => void): () => void
+      ClipboardSetText?(text: string): Promise<boolean>
+    }
   }
 }
+
 export {}

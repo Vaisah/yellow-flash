@@ -86,6 +86,48 @@ func FilenameFromURL(u *url.URL) string {
 	return name
 }
 
+// knownExtensions maps common download media types to their usual
+// extension. Generic types such as application/octet-stream are absent on
+// purpose: guessing would be worse than no extension.
+var knownExtensions = map[string]string{
+	"video/mp4": ".mp4", "video/webm": ".webm", "video/x-matroska": ".mkv", "video/quicktime": ".mov",
+	"video/x-msvideo": ".avi", "video/mp2t": ".ts", "video/x-flv": ".flv", "video/3gpp": ".3gp",
+	"audio/mpeg": ".mp3", "audio/mp4": ".m4a", "audio/aac": ".aac", "audio/ogg": ".ogg", "audio/opus": ".opus",
+	"audio/flac": ".flac", "audio/wav": ".wav", "audio/x-wav": ".wav", "audio/webm": ".weba",
+	"image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif", "image/webp": ".webp", "image/svg+xml": ".svg",
+	"application/pdf": ".pdf", "application/zip": ".zip", "application/x-7z-compressed": ".7z",
+	"application/vnd.rar": ".rar", "application/x-rar-compressed": ".rar", "application/gzip": ".gz",
+	"application/x-gzip": ".gz", "application/x-tar": ".tar", "application/x-bzip2": ".bz2", "application/x-xz": ".xz",
+	"application/x-msdownload": ".exe", "application/x-msi": ".msi", "application/vnd.debian.binary-package": ".deb",
+	"application/x-iso9660-image": ".iso", "application/vnd.android.package-archive": ".apk",
+	"application/json": ".json", "application/xml": ".xml", "text/plain": ".txt", "text/csv": ".csv",
+	"text/html": ".html", "application/epub+zip": ".epub", "application/msword": ".doc",
+	"application/vnd.openxmlformats-officedocument.wordprocessingml.document":   ".docx",
+	"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":         ".xlsx",
+	"application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+}
+
+// ExtensionForMIME returns the usual extension for a Content-Type value
+// (parameters ignored), or "" when unknown or generic.
+func ExtensionForMIME(contentType string) string {
+	mediaType, _, _ := strings.Cut(contentType, ";")
+	return knownExtensions[strings.ToLower(strings.TrimSpace(mediaType))]
+}
+
+// WithExtension appends ext when name has no extension of its own.
+func WithExtension(name, ext string) string {
+	if ext == "" || filepath.Ext(name) != "" {
+		return name
+	}
+	return name + ext
+}
+
+// IsHTMLName reports whether name looks like a deliberately requested page.
+func IsHTMLName(name string) bool {
+	ext := strings.ToLower(filepath.Ext(name))
+	return ext == ".html" || ext == ".htm" || ext == ".xhtml"
+}
+
 // TempPath returns the predictable temporary path, e.g. movie.mp4.part.
 func TempPath(dir, filename string) string { return filepath.Join(dir, filename+TempSuffix) }
 

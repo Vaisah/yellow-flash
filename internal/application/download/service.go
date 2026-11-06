@@ -32,6 +32,14 @@ func (s *Service) Create(ctx context.Context, req domain.CreateRequest) (*domain
 	return s.port.Create(ctx, req)
 }
 
+// Inspect previews a link (name, size, type) without downloading it.
+func (s *Service) Inspect(ctx context.Context, url string, headers map[string]string) (*domain.LinkInfo, error) {
+	if strings.TrimSpace(url) == "" {
+		return nil, fmt.Errorf("%w: URL is required", domain.ErrInvalidRequest)
+	}
+	return s.port.Inspect(ctx, url, headers)
+}
+
 // Add creates a download and starts it. If starting fails, the created
 // record is still returned together with the error.
 func (s *Service) Add(ctx context.Context, req domain.CreateRequest) (*domain.Download, error) {
@@ -104,6 +112,21 @@ func (s *Service) PauseAll(ctx context.Context) error {
 	for _, d := range active {
 		if err := s.port.Pause(ctx, d.ID); err != nil && !errors.Is(err, domain.ErrInvalidTransition) {
 			errs = append(errs, fmt.Errorf("pause %s: %w", d.ID, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// ResumeAll starts every queued or paused download, returning joined errors.
+func (s *Service) ResumeAll(ctx context.Context) error {
+	waiting, err := s.ListByStatus(ctx, domain.Queued, domain.Paused)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, d := range waiting {
+		if err := s.port.Start(ctx, d.ID); err != nil && !errors.Is(err, domain.ErrInvalidTransition) {
+			errs = append(errs, fmt.Errorf("start %s: %w", d.ID, err))
 		}
 	}
 	return errors.Join(errs...)

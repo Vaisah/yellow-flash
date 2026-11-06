@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -89,29 +90,53 @@ func (m *Manager) transferSegmented(ctx context.Context, e *entry, d *domain.Dow
 	defer cancelW(nil)
 	mon := m.startMonitor(e, tr, checkpoint, func(err error) { cancelW(err) })
 	g, gctx := errgroup.WithContext(wctx)
-	jobs := make(chan *segmentState)
-	g.Go(func() error {
-		defer close(jobs)
-		for _, st := range pending {
-			select {
-			case jobs <- st:
-			case <-gctx.Done():
-				return nil
-			}
-		}
-		return nil
-	})
+	queue := &segmentQueue{items: pending}
 	workers := min(d.Connections, m.cfg.MaxConnections, len(pending))
+	var alive atomic.Int32
+	alive.Store(int32(workers))
 	for i := 0; i < workers; i++ {
 		g.Go(func() error {
+			yielded := false
+			defer func() {
+				if !yielded {
+					alive.Add(-1)
+				}
+			}()
+			// A throttled worker steps aside while others are still running,
+			// so concurrency settles at whatever the server allows. The last
+			// worker never yields; for it throttling is a real error.
+			yield := func(c Classification) bool {
+				if !isThrottle(c) {
+					return false
+				}
+				for {
+					n := alive.Load()
+					if n <= 1 {
+						return false
+					}
+					if alive.CompareAndSwap(n, n-1) {
+						yielded = true
+						return true
+					}
+				}
+			}
 			buf := make([]byte, readBufferSize)
-			for st := range jobs {
-				if err := m.fetchSegment(gctx, e, f, st, meta, headers, tr, buf); err != nil {
+			for {
+				st := queue.pop()
+				if st == nil {
+					return nil
+				}
+				err := m.fetchSegment(gctx, e, f, st, meta, headers, tr, buf, yield)
+				if errors.Is(err, errYielded) {
+					queue.pushFront(st)
+					m.cfg.Logger.Info("server is limiting connections; continuing with fewer", "id", d.ID, "connections", alive.Load())
+					return nil
+				}
+				if err != nil {
 					return fmt.Errorf("segment %d: %w", st.seg.Index, err)
 				}
 				mon.notify()
 			}
-			return nil
 		})
 	}
 	err = g.Wait()
@@ -136,8 +161,39 @@ func (m *Manager) transferSegmented(ctx context.Context, e *entry, d *domain.Dow
 	return nil
 }
 
-func (m *Manager) fetchSegment(ctx context.Context, e *entry, f *os.File, st *segmentState, meta *domain.RemoteMetadata, headers http.Header, tr *tracker, buf []byte) error {
-	return m.withRetry(ctx, e, func() { st.retries.Add(1) }, func() (bool, error) {
+// errYielded means a worker gave its segment back instead of retrying.
+var errYielded = errors.New("worker yielded segment")
+
+// isThrottle reports a server signalling too many connections.
+func isThrottle(c Classification) bool {
+	return c.Kind == KindHTTP && (c.StatusCode == http.StatusTooManyRequests || c.StatusCode == http.StatusServiceUnavailable)
+}
+
+// segmentQueue hands out pending segments; yielded ones go back in front.
+type segmentQueue struct {
+	mu    sync.Mutex
+	items []*segmentState
+}
+
+func (q *segmentQueue) pop() *segmentState {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if len(q.items) == 0 {
+		return nil
+	}
+	st := q.items[0]
+	q.items = q.items[1:]
+	return st
+}
+
+func (q *segmentQueue) pushFront(st *segmentState) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.items = append([]*segmentState{st}, q.items...)
+}
+
+func (m *Manager) fetchSegment(ctx context.Context, e *entry, f *os.File, st *segmentState, meta *domain.RemoteMetadata, headers http.Header, tr *tracker, buf []byte, yield func(Classification) bool) error {
+	return m.withRetryYield(ctx, e, func() { st.retries.Add(1) }, yield, func() (bool, error) {
 		before := st.done.Load()
 		err := m.fetchRange(ctx, f, st, meta, headers, tr, buf)
 		return st.done.Load() > before, err

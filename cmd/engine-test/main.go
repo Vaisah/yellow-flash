@@ -99,12 +99,14 @@ func run() int {
 	svc := appdownload.New(mgr)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	// -list is read-only: it must not run recovery, which would mark
+	// downloads another running process owns as interrupted.
+	if *list {
+		return listDownloads(ctx, svc)
+	}
 	if err = svc.Recover(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, "recover:", err)
 		return 1
-	}
-	if *list {
-		return listDownloads(ctx, svc)
 	}
 
 	id := *resume
@@ -178,7 +180,10 @@ func listDownloads(ctx context.Context, svc *appdownload.Service) int {
 		return 1
 	}
 	for _, d := range items {
-		fmt.Printf("%s  %-11s %10s / %-10s  %s\n", d.ID, d.Status, humanBytes(d.Downloaded), humanBytes(d.Size), filepath.Join(d.Destination, d.Filename))
+		fmt.Printf("%s  %-11s %10s / %-10s  %s\n    url: %s\n", d.ID, d.Status, humanBytes(d.Downloaded), humanBytes(d.Size), filepath.Join(d.Destination, d.Filename), d.URL)
+		if d.Error != "" {
+			fmt.Printf("    error: %s\n", d.Error)
+		}
 	}
 	return 0
 }

@@ -115,6 +115,18 @@ type RemoteMetadata struct {
 	Checksum          []byte `json:"checksum,omitempty"`
 }
 
+// LinkInfo previews what a link points to, before a download is created.
+type LinkInfo struct {
+	URL            string `json:"url"`
+	FinalURL       string `json:"finalUrl"`
+	Filename       string `json:"filename"`
+	Size           int64  `json:"size"`
+	MIMEType       string `json:"mimeType"`
+	RangeSupported bool   `json:"rangeSupported"`
+	// WebPage is true when the link returns an HTML page instead of a file.
+	WebPage bool `json:"webPage"`
+}
+
 // Progress is a point-in-time transfer statistic. Unknown values are -1.
 type Progress struct {
 	DownloadID        string  `json:"downloadId"`

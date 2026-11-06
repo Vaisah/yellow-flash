@@ -45,10 +45,15 @@ type fileServer struct {
 	badContentRange bool // non-probe 206 responses carry a wrong Content-Range
 	unknownLength   bool // chunked, no Content-Length, no ranges
 	reprDigest      string
-	disposition     string
-	requireAuth     string
-	chunk           int
-	delay           time.Duration
+	contentType     string
+	// maxActive, if > 0, answers 429 when more transfers than this run at once.
+	maxActive   int64
+	active      atomic.Int64
+	throttled   atomic.Int64
+	disposition string
+	requireAuth string
+	chunk       int
+	delay       time.Duration
 
 	// fail may answer a request with an error status (0 = serve normally).
 	fail func(r *http.Request, n int64) (status int, retryAfter string)
@@ -122,8 +127,22 @@ func (fs *fileServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Per-IP connection limit, as many real servers enforce.
+	if fs.maxActive > 0 && r.Method == http.MethodGet && r.Header.Get("Range") != "bytes=0-0" {
+		if fs.active.Add(1) > fs.maxActive {
+			fs.active.Add(-1)
+			fs.throttled.Add(1)
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		defer fs.active.Add(-1)
+	}
 	h := w.Header()
-	h.Set("Content-Type", "application/octet-stream")
+	contentType := fs.contentType
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	h.Set("Content-Type", contentType)
 	if !fs.unknownLength {
 		h.Set("ETag", etag)
 	}

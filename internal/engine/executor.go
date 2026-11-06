@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	domain "github.com/vaisah/internal/domain/download"
@@ -20,7 +21,17 @@ var (
 	// errContentRangeMismatch means a 206 response covers different bytes
 	// than requested.
 	errContentRangeMismatch = errors.New("Content-Range does not match the requested range")
+	// ErrWebPage means the link returned an HTML page rather than a file,
+	// e.g. a video site's watch page. Such pages need a media extractor or
+	// the browser integration to find the real media URL.
+	ErrWebPage = errors.New("the link points to a web page, not a downloadable file")
 )
+
+func isWebPage(contentType string) bool {
+	mediaType, _, _ := strings.Cut(contentType, ";")
+	mediaType = strings.ToLower(strings.TrimSpace(mediaType))
+	return mediaType == "text/html" || mediaType == "application/xhtml+xml"
+}
 
 // run owns the download until it reaches a resting state.
 func (m *Manager) run(ctx context.Context, e *entry) {
@@ -161,8 +172,19 @@ func (m *Manager) applyMetadata(ctx context.Context, e *entry, meta domain.Remot
 		m.mu.Unlock()
 		return nil, context.Canceled
 	}
-	if !d.FilenameExplicit && meta.Filename != "" && d.Downloaded == 0 && !exists(d.TempPath) {
-		if name, err := filesystem.SanitizeFilename(meta.Filename); err == nil && name != d.Filename {
+	if isWebPage(meta.MIMEType) && !filesystem.IsHTMLName(d.Filename) && !filesystem.IsHTMLName(meta.Filename) {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("%w (server sent %s)", ErrWebPage, meta.MIMEType)
+	}
+	if !d.FilenameExplicit && d.Downloaded == 0 && !exists(d.TempPath) {
+		name := d.Filename
+		if meta.Filename != "" {
+			if sanitized, err := filesystem.SanitizeFilename(meta.Filename); err == nil {
+				name = sanitized
+			}
+		}
+		name = filesystem.WithExtension(name, filesystem.ExtensionForMIME(meta.MIMEType))
+		if name != d.Filename {
 			d.Filename = m.reserveNameLocked(d.Destination, name, d.ID)
 			d.TempPath = filesystem.TempPath(d.Destination, d.Filename)
 		}

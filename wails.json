@@ -1,10 +1,15 @@
 {
   "$schema": "https://wails.io/schemas/config.v2.json",
-  "name": "download-manager",
-  "outputfilename": "Download Manager",
+  "name": "yellow-flash",
+  "outputfilename": "Yellow Flash",
   "frontend:install": "npm ci",
   "frontend:build": "npm run build",
   "frontend:dev:watcher": "npm run dev",
   "frontend:dev:serverUrl": "auto",
-  "author": { "name": "Download Manager", "email": "" }
+  "author": { "name": "Yellow Flash", "email": "" },
+  "info": {
+    "productName": "Yellow Flash Download Manager",
+    "productVersion": "0.2.0",
+    "comments": "Fast, resumable multi-connection downloads"
+  }
 }
