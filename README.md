@@ -37,6 +37,20 @@ wails build      # produces build/bin/Yellow Flash.exe (icon from build/appicon.
 - Docker, only to run the race detector on Windows hosts without a C toolchain.
 - For the desktop shell only: Node 22, the Wails v2 CLI, and on Linux GTK 3 and WebKitGTK 4.1.
 
+## Desktop app command line
+
+Only one Yellow Flash runs per data folder. Launching it again hands that launch's command line to the running app (or just brings its window to the front), using IDM's syntax:
+
+```sh
+"Yellow Flash.exe" /d https://example.com/file.iso            # opens Add URL with the link
+"Yellow Flash.exe" /d https://example.com/file.iso /p D:\dl /f a.iso /n   # adds and starts it, no dialog
+"Yellow Flash.exe" /d https://example.com/file.iso /a         # adds it without starting
+"Yellow Flash.exe" /s                                          # starts every waiting download
+"Yellow Flash.exe" /exit                                       # the running app saves and quits
+```
+
+Flags are case-insensitive and may also start with `-`. Set `YELLOWFLASH_DATA_DIR` to run a separate instance with its own list, for example in tests. A writable `data` folder next to the program turns on portable mode.
+
 ## Using the engine from the command line
 
 ```sh

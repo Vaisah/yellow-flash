@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { DragEvent } from 'react'
 import { CheckCircle2, CircleAlert, Info, Plus, X } from 'lucide-react'
-import { backend, copyText, errorMessage } from './api'
+import { backend, copyText, errorMessage, onAddRequest, onNotice } from './api'
 import { useDownloads } from './hooks/useDownloads'
 import { CATEGORIES, categoryOf } from './lib/categories'
 import type { Category } from './lib/categories'
@@ -16,7 +16,11 @@ import { canCancel, canDelete, canPause, canResume, isActive } from './types'
 import type { AppInfo, Download, Settings } from './types'
 import logo from './assets/yellow-flash-256.png'
 
-type Dialog = { kind: 'add'; url: string } | { kind: 'settings' } | { kind: 'delete'; d: Download } | null
+type Dialog =
+  | { kind: 'add'; url: string; filename?: string; directory?: string; seq: number }
+  | { kind: 'settings' }
+  | { kind: 'delete'; d: Download }
+  | null
 interface Toast { id: number; kind: 'ok' | 'error' | 'info'; text: string }
 
 const DEFAULT_SETTINGS: Settings = { downloadDirectory: '', connections: 8, startImmediately: true, useClipboard: true }
@@ -58,6 +62,7 @@ export default function App() {
   const [dragging, setDragging] = useState(false)
   const searchRef = useRef<HTMLInputElement>(null)
   const toastId = useRef(0)
+  const addSeq = useRef(0)
 
   const toast = useCallback((kind: Toast['kind'], text: string) => {
     const id = ++toastId.current
@@ -69,6 +74,12 @@ export default function App() {
     backend().GetSettings().then(setSettings).catch((e) => toast('error', `Could not load settings: ${errorMessage(e)}`))
     backend().Info().then(setInfo).catch(() => undefined)
   }, [toast])
+
+  /* Commands from a second launch (IDM-style command line). */
+  useEffect(() => onAddRequest((p) => setDialog({
+    kind: 'add', url: p.url, filename: p.filename || undefined, directory: p.directory || undefined, seq: ++addSeq.current,
+  })), [])
+  useEffect(() => onNotice((n) => toast(n.kind, n.text)), [toast])
 
   /* ---------- derived lists ---------- */
 
@@ -123,7 +134,7 @@ export default function App() {
   const openAdd = useCallback(async (prefill?: string) => {
     let url = prefill ?? ''
     if (!url && settings.useClipboard) url = await backend().ClipboardURL().catch(() => '')
-    setDialog({ kind: 'add', url })
+    setDialog({ kind: 'add', url, seq: ++addSeq.current })
   }, [settings.useClipboard])
 
   const activate = useCallback((d: Download) => {
@@ -282,7 +293,10 @@ export default function App() {
 
       {dialog?.kind === 'add' && (
         <AddUrlDialog
+          key={dialog.seq}
           initialUrl={dialog.url}
+          initialFilename={dialog.filename}
+          initialDirectory={dialog.directory}
           settings={settings}
           onClose={() => setDialog(null)}
           onAdded={(d, started) => {

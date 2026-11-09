@@ -20,6 +20,12 @@ port began (the Phase 1 engine, the SQLite store, the Wails app and the React in
 code designed only after studying Mister Download Manager's behaviour (the dynamic-splitting
 planner, the first-request download), is original to Yellow Flash.
 
+## Go dependencies added for the port
+
+| Module | Licence | Used for | Since |
+|---|---|---|---|
+| `golang.org/x/sys` | BSD-3-Clause | Windows file lock and foreground permission (`internal/platform/lock_windows.go`); it was already an indirect dependency via Wails | port step 1 (`internal/ipc`) |
+
 ## Third-party data and assets
 
 Assets ported from Mister Download Manager keep their own licences, as listed in its

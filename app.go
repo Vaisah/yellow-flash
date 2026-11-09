@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/vaisah/internal/application/download"
@@ -16,13 +18,14 @@ import (
 	"github.com/vaisah/internal/engine"
 	"github.com/vaisah/internal/infrastructure/network"
 	"github.com/vaisah/internal/infrastructure/persistence/sqlite"
+	"github.com/vaisah/internal/ipc"
 	"github.com/vaisah/internal/platform"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // AppName is the product name shown in the window and used for app data.
 const (
-	AppName    = "Yellow Flash"
+	AppName    = ipc.AppName
 	AppVersion = "0.2.0"
 )
 
@@ -37,6 +40,12 @@ type App struct {
 	store   *sqlite.Store
 	manager *engine.Manager
 	dataDir string
+
+	// Commands from the IPC channel wait here until the UI is ready.
+	commands chan ipc.Incoming
+	stop     chan struct{}
+	stopOnce sync.Once
+	closing  atomic.Bool
 }
 
 // Settings are user preferences persisted in SQLite.
@@ -70,28 +79,22 @@ const (
 	keyClipboard   = "ui.useClipboard"
 )
 
-// NewApp opens the state database. Data written by earlier builds under the
-// old "Download Manager" folder is moved to the Yellow Flash folder once.
-func NewApp() (*App, error) {
-	configDir, err := os.UserConfigDir()
-	if err != nil {
-		return nil, err
-	}
-	dataDir := filepath.Join(configDir, AppName)
-	legacy := filepath.Join(configDir, "Download Manager")
-	if _, err = os.Stat(dataDir); errors.Is(err, os.ErrNotExist) {
-		if _, legacyErr := os.Stat(legacy); legacyErr == nil {
-			_ = os.Rename(legacy, dataDir)
-		}
-	}
-	if err = os.MkdirAll(dataDir, 0o700); err != nil {
+// NewApp opens the state database in dataDir (see ipc.DataDir). The caller
+// must hold the instance lock for dataDir.
+func NewApp(dataDir string) (*App, error) {
+	if err := ipc.PrivateDir(dataDir); err != nil {
 		return nil, err
 	}
 	store, err := sqlite.Open(filepath.Join(dataDir, "downloads.db"))
 	if err != nil {
 		return nil, err
 	}
-	return &App{store: store, dataDir: dataDir}, nil
+	return &App{
+		store:    store,
+		dataDir:  dataDir,
+		commands: make(chan ipc.Incoming, commandBacklog),
+		stop:     make(chan struct{}),
+	}, nil
 }
 
 // Startup attaches Wails' application context and restores interrupted work.
@@ -119,6 +122,7 @@ func (a *App) Startup(ctx context.Context) {
 
 // Shutdown pauses active downloads, persisting progress, then closes the DB.
 func (a *App) Shutdown(ctx context.Context) {
+	a.stopCommands()
 	canClose := true
 	if a.service != nil {
 		waitCtx, cancel := context.WithTimeout(ctx, 20*time.Second)

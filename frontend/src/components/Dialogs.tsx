@@ -23,16 +23,20 @@ function looksLikeUrl(text: string): boolean {
 
 interface AddProps {
   initialUrl: string
+  /** From a command line's /f: kept over the name the link suggests. */
+  initialFilename?: string
+  /** From a command line's /p. */
+  initialDirectory?: string
   settings: Settings
   onClose: () => void
   onAdded: (d: Download, started: boolean) => void
 }
 
-export function AddUrlDialog({ initialUrl, settings, onClose, onAdded }: AddProps) {
+export function AddUrlDialog({ initialUrl, initialFilename, initialDirectory, settings, onClose, onAdded }: AddProps) {
   const [url, setUrl] = useState(initialUrl)
-  const [filename, setFilename] = useState('')
-  const [filenameEdited, setFilenameEdited] = useState(false)
-  const [directory, setDirectory] = useState(settings.downloadDirectory)
+  const [filename, setFilename] = useState(initialFilename ?? '')
+  const [filenameEdited, setFilenameEdited] = useState(!!initialFilename)
+  const [directory, setDirectory] = useState(initialDirectory ?? settings.downloadDirectory)
   const [connections, setConnections] = useState(settings.connections)
   const [info, setInfo] = useState<LinkInfo | null>(null)
   const [inspecting, setInspecting] = useState(false)
