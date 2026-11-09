@@ -1,45 +1,28 @@
 import { useEffect, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
-import { ArrowDown, ArrowUp, Copy, FolderOpen, Pause, Play, RotateCcw, Square, Trash2, ExternalLink } from 'lucide-react'
-import { iconFor } from '../lib/categories'
-import { explainError } from '../lib/errors'
-import { formatBytes, formatDate, formatEta, formatSpeed, percentOf, parseTime } from '../lib/format'
+import {
+  ArrowDown,
+  ArrowUp,
+  Copy,
+  ExternalLink,
+  FileCheck,
+  FolderOpen,
+  Pause,
+  Play,
+  RotateCcw,
+  Square,
+  Trash2,
+} from 'lucide-react'
+import { categoryLabel, iconFor } from '../lib/categories'
+import { formatBytes, formatDate, formatEta, percentOf, parseTime } from '../lib/format'
 import { canCancel, canDelete, canPause, canResume } from '../types'
 import type { Download, Progress } from '../types'
 
-export type SortKey = 'name' | 'size' | 'progress' | 'speed' | 'eta' | 'added'
-export interface Sort { key: SortKey; dir: 'asc' | 'desc' }
-
-export interface RowActions {
-  resume(d: Download): void
-  pause(d: Download): void
-  cancel(d: Download): void
-  retry(d: Download): void
-  remove(d: Download): void
-  openFile(d: Download): void
-  showInFolder(d: Download): void
-  copyLink(d: Download): void
+export type SortKey = 'name' | 'size' | 'progress' | 'eta' | 'added'
+export interface Sort {
+  key: SortKey
+  dir: 'asc' | 'desc'
 }
-
-interface Props {
-  rows: Download[]
-  progress: Record<string, Progress>
-  selectedId: string | null
-  sort: Sort
-  onSort: (key: SortKey) => void
-  onSelect: (id: string) => void
-  onActivate: (d: Download) => void
-  actions: RowActions
-}
-
-const COLUMNS: { key: SortKey; label: string; className: string }[] = [
-  { key: 'name', label: 'File name', className: 'col-name' },
-  { key: 'size', label: 'Size', className: 'col-size' },
-  { key: 'progress', label: 'Status', className: 'col-status' },
-  { key: 'speed', label: 'Speed', className: 'col-speed' },
-  { key: 'eta', label: 'Time left', className: 'col-eta' },
-  { key: 'added', label: 'Added', className: 'col-added' },
-]
 
 export function statusLabel(d: Download, pct: number): string {
   switch (d.status) {
@@ -50,29 +33,62 @@ export function statusLabel(d: Download, pct: number): string {
     case 'QUEUED': return 'Queued'
     case 'VERIFYING': return 'Verifying…'
     case 'COMPLETED': return 'Complete'
-    case 'FAILED': return explainError(d.error).title
+    case 'FAILED': return 'Failed'
     case 'CANCELLED': return 'Cancelled'
   }
 }
 
-function hostOf(url: string): string {
-  try {
-    return new URL(url).hostname.replace(/^www\./, '')
-  } catch {
-    return url
-  }
+export interface RowActions {
+  resume(d: Download): void
+  pause(d: Download): void
+  cancel(d: Download): void
+  retry(d: Download): void
+  remove(d: Download): void
+  openFile(d: Download): void
+  showInFolder(d: Download): void
+  copyLink(d: Download): void
+  verifyChecksum?(d: Download): void
 }
 
-export function sortRows(rows: Download[], progress: Record<string, Progress>, sort: Sort): Download[] {
+interface Props {
+  rows: Download[]
+  progress: Record<string, Progress>
+  selectedId: string | null
+  checkedIds: Set<string>
+  onToggleCheck: (id: string) => void
+  sort: Sort
+  onSort: (key: SortKey) => void
+  onSelect: (id: string) => void
+  onActivate: (d: Download) => void
+  actions: RowActions
+}
+
+const COLUMNS: { key: SortKey; label: string; className: string }[] = [
+  { key: 'name', label: 'Name', className: 'col-name' },
+  { key: 'size', label: 'Size', className: 'col-size' },
+  { key: 'progress', label: 'Status', className: 'col-status' },
+  { key: 'eta', label: 'Time Left', className: 'col-eta' },
+  { key: 'added', label: 'Last Modification', className: 'col-mod' },
+]
+
+export function sortRows(
+  rows: Download[],
+  progress: Record<string, Progress>,
+  sort: Sort,
+): Download[] {
   const value = (d: Download): number | string => {
     const p = progress[d.id]
     switch (sort.key) {
-      case 'name': return d.filename.toLowerCase()
-      case 'size': return d.size
-      case 'progress': return percentOf(p?.downloaded ?? d.downloaded, d.size)
-      case 'speed': return p?.speed ?? 0
-      case 'eta': return p && p.etaSeconds >= 0 ? p.etaSeconds : Number.MAX_SAFE_INTEGER
-      case 'added': return parseTime(d.createdAt)?.getTime() ?? 0
+      case 'name':
+        return d.filename.toLowerCase()
+      case 'size':
+        return d.size
+      case 'progress':
+        return percentOf(p?.downloaded ?? d.downloaded, d.size)
+      case 'eta':
+        return p && p.etaSeconds >= 0 ? p.etaSeconds : Number.MAX_SAFE_INTEGER
+      case 'added':
+        return parseTime(d.createdAt)?.getTime() ?? 0
     }
   }
   const factor = sort.dir === 'asc' ? 1 : -1
@@ -85,9 +101,24 @@ export function sortRows(rows: Download[], progress: Record<string, Progress>, s
   })
 }
 
-interface MenuState { x: number; y: number; d: Download }
+interface MenuState {
+  x: number
+  y: number
+  d: Download
+}
 
-export function DownloadTable({ rows, progress, selectedId, sort, onSort, onSelect, onActivate, actions }: Props) {
+export function DownloadTable({
+  rows,
+  progress,
+  selectedId,
+  checkedIds,
+  onToggleCheck,
+  sort,
+  onSort,
+  onSelect,
+  onActivate,
+  actions,
+}: Props) {
   const [menu, setMenu] = useState<MenuState | null>(null)
 
   useEffect(() => {
@@ -107,7 +138,11 @@ export function DownloadTable({ rows, progress, selectedId, sort, onSort, onSele
   const openMenu = (e: ReactMouseEvent, d: Download) => {
     e.preventDefault()
     onSelect(d.id)
-    setMenu({ x: Math.min(e.clientX, window.innerWidth - 220), y: Math.min(e.clientY, window.innerHeight - 300), d })
+    setMenu({
+      x: Math.min(e.clientX, window.innerWidth - 220),
+      y: Math.min(e.clientY, window.innerHeight - 300),
+      d,
+    })
   }
 
   const run = (fn: (d: Download) => void) => () => {
@@ -117,14 +152,41 @@ export function DownloadTable({ rows, progress, selectedId, sort, onSort, onSele
 
   return (
     <div className="table-wrap">
-      <table className="downloads" aria-label="Downloads">
+      <table className="downloads-table" aria-label="Downloads list">
         <thead>
           <tr>
+            <th className="col-chk">
+              <span className="th-chk-placeholder" />
+            </th>
             {COLUMNS.map((c) => (
-              <th key={c.key} className={c.className} aria-sort={sort.key === c.key ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
-                <button onClick={() => onSort(c.key)}>
-                  {c.label}
-                  {sort.key === c.key && (sort.dir === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />)}
+              <th
+                key={c.key}
+                className={c.className}
+                aria-sort={
+                  sort.key === c.key
+                    ? sort.dir === 'asc'
+                      ? 'ascending'
+                      : 'descending'
+                    : 'none'
+                }
+              >
+                <button
+                  type="button"
+                  className="th-btn"
+                  onClick={() => onSort(c.key)}
+                >
+                  <span>{c.label}</span>
+                  <span className="sort-arrows">
+                    {sort.key === c.key ? (
+                      sort.dir === 'asc' ? (
+                        <ArrowUp size={12} className="sort-active" />
+                      ) : (
+                        <ArrowDown size={12} className="sort-active" />
+                      )
+                    ) : (
+                      <span className="sort-both">↕</span>
+                    )}
+                  </span>
                 </button>
               </th>
             ))}
@@ -136,56 +198,205 @@ export function DownloadTable({ rows, progress, selectedId, sort, onSort, onSele
             const done = p?.downloaded ?? d.downloaded
             const pct = percentOf(done, d.size)
             const Icon = iconFor(d.filename)
-            const status = d.status.toLowerCase()
+            const subLabel = categoryLabel(d.filename)
+            const isSelected = selectedId === d.id
+            const isChecked = checkedIds.has(d.id)
+            const isCompleted = d.status === 'COMPLETED'
+            const isDownloading = d.status === 'DOWNLOADING' || d.status === 'INITIALIZING'
+            const isPaused = d.status === 'PAUSED'
+            const isFailed = d.status === 'FAILED'
+
             return (
               <tr
                 key={d.id}
-                className={`row status-${status} ${selectedId === d.id ? 'selected' : ''}`}
-                aria-selected={selectedId === d.id}
-                tabIndex={selectedId === d.id ? 0 : -1}
+                className={`table-row ${isSelected ? 'selected' : ''}`}
                 onClick={() => onSelect(d.id)}
                 onDoubleClick={() => onActivate(d)}
                 onContextMenu={(e) => openMenu(e, d)}
+                tabIndex={isSelected ? 0 : -1}
+                aria-selected={isSelected}
               >
+                {/* 1. Checkbox column */}
+                <td
+                  className="col-chk"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onToggleCheck(d.id)
+                  }}
+                >
+                  <div
+                    className={`custom-checkbox-box ${isChecked ? 'checked' : ''}`}
+                    aria-label={`Select ${d.filename}`}
+                  >
+                    {isChecked && (
+                      <svg viewBox="0 0 14 14" fill="none" className="check-svg">
+                        <path
+                          d="M3 7.5L5.5 10L11 4.5"
+                          stroke="white"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                    )}
+                  </div>
+                </td>
+
+                {/* 2. Name & Category column */}
                 <td className="col-name">
                   <div className="name-cell">
-                    <span className={`file-badge status-${status}`}><Icon size={16} /></span>
-                    <div className="name-text">
-                      <strong title={d.filename}>{d.filename}</strong>
-                      <span title={d.url}>{hostOf(d.url)}</span>
+                    <div className="file-badge-square">
+                      <Icon size={17} className="file-badge-icon" />
+                    </div>
+                    <div className="name-text-col">
+                      <span className="name-title" title={d.filename}>
+                        {d.filename}
+                      </span>
+                      <span className="name-subtitle">{subLabel}</span>
                     </div>
                   </div>
                 </td>
-                <td className="col-size num">{formatBytes(d.size)}</td>
+
+                {/* 3. Size column */}
+                <td className="col-size num-text">
+                  {formatBytes(d.size)}
+                </td>
+
+                {/* 4. Status column */}
                 <td className="col-status">
-                  <div className="status-cell">
-                    <div className="bar" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct >= 0 ? Math.round(pct) : undefined}>
-                      <div className={`bar-fill ${pct < 0 && d.status === 'DOWNLOADING' ? 'indeterminate' : ''}`} style={{ width: `${pct >= 0 ? pct : d.status === 'DOWNLOADING' || d.status === 'FAILED' ? 100 : 0}%` }} />
+                  {isCompleted && (
+                    <span className="status-complete-text">Complete</span>
+                  )}
+
+                  {isDownloading && (
+                    <div className="status-progress-wrap">
+                      <div className="status-pct-label">
+                        {pct >= 0 ? `${Math.round(pct)}%` : 'Downloading'}
+                      </div>
+                      <div className="progress-track">
+                        <div
+                          className="progress-fill"
+                          style={{
+                            width: `${pct >= 0 ? pct : 35}%`,
+                          }}
+                        />
+                      </div>
                     </div>
-                    <span className="status-text" title={d.status === 'FAILED' ? d.error : undefined}>{statusLabel(d, pct)}</span>
-                  </div>
+                  )}
+
+                  {isPaused && (
+                    <div className="status-paused-box">
+                      <Square size={13} className="pause-square-icon" />
+                      <span className="status-paused-text">Paused</span>
+                    </div>
+                  )}
+
+                  {pct === 0 && !isCompleted && !isDownloading && !isPaused && !isFailed && (
+                    <span className="status-zero-text">0%</span>
+                  )}
+
+                  {isFailed && (
+                    <span className="status-failed-text" title={d.error || 'Download failed'}>
+                      Failed
+                    </span>
+                  )}
                 </td>
-                <td className="col-speed num">{p ? formatSpeed(p.speed) : '—'}</td>
-                <td className="col-eta num">{p ? formatEta(p.etaSeconds) : '—'}</td>
-                <td className="col-added num">{formatDate(d.createdAt)}</td>
+
+                {/* 5. Time Left column */}
+                <td className="col-eta num-text">
+                  {isCompleted ? '0 Sec' : formatEta(p?.etaSeconds ?? (isDownloading ? 0 : -1))}
+                </td>
+
+                {/* 6. Last Modification column */}
+                <td className="col-mod num-text">
+                  {formatDate(d.createdAt)}
+                </td>
               </tr>
             )
           })}
         </tbody>
       </table>
 
+      {/* Context Menu */}
       {menu && (
-        <div className="context-menu" role="menu" style={{ left: menu.x, top: menu.y }} onClick={(e) => e.stopPropagation()}>
-          <button role="menuitem" disabled={menu.d.status !== 'COMPLETED'} onClick={run(actions.openFile)}><ExternalLink size={14} /> Open file</button>
-          <button role="menuitem" onClick={run(actions.showInFolder)}><FolderOpen size={14} /> Show in folder</button>
+        <div
+          className="context-menu"
+          role="menu"
+          style={{ left: menu.x, top: menu.y }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            disabled={menu.d.status !== 'COMPLETED'}
+            onClick={run(actions.openFile)}
+          >
+            <ExternalLink size={14} /> Open file
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={run(actions.showInFolder)}
+          >
+            <FolderOpen size={14} /> Show in folder
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={run((d) => actions.verifyChecksum?.(d))}
+          >
+            <FileCheck size={14} /> Verify checksum (MD5/SHA256)...
+          </button>
           <hr />
-          <button role="menuitem" disabled={!canResume(menu.d.status)} onClick={run(actions.resume)}><Play size={14} /> Resume</button>
-          <button role="menuitem" disabled={!canPause(menu.d.status)} onClick={run(actions.pause)}><Pause size={14} /> Pause</button>
-          <button role="menuitem" disabled={menu.d.status !== 'FAILED'} onClick={run(actions.retry)}><RotateCcw size={14} /> Retry</button>
-          <button role="menuitem" disabled={!canCancel(menu.d.status)} onClick={run(actions.cancel)}><Square size={14} /> Cancel</button>
+          <button
+            type="button"
+            role="menuitem"
+            disabled={!canResume(menu.d.status)}
+            onClick={run(actions.resume)}
+          >
+            <Play size={14} /> Resume
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            disabled={!canPause(menu.d.status)}
+            onClick={run(actions.pause)}
+          >
+            <Pause size={14} /> Stop
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            disabled={menu.d.status !== 'FAILED'}
+            onClick={run(actions.retry)}
+          >
+            <RotateCcw size={14} /> Retry
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            disabled={!canCancel(menu.d.status)}
+            onClick={run(actions.cancel)}
+          >
+            <Square size={14} /> Cancel
+          </button>
           <hr />
-          <button role="menuitem" onClick={run(actions.copyLink)}><Copy size={14} /> Copy link</button>
-          <button role="menuitem" className="danger" disabled={!canDelete(menu.d.status)} onClick={run(actions.remove)}><Trash2 size={14} /> Remove…</button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={run(actions.copyLink)}
+          >
+            <Copy size={14} /> Copy link
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="danger"
+            disabled={!canDelete(menu.d.status)}
+            onClick={run(actions.remove)}
+          >
+            <Trash2 size={14} /> Delete
+          </button>
         </div>
       )}
     </div>

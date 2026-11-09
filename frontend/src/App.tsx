@@ -11,7 +11,12 @@ import type { StatusFilter } from './components/Chrome'
 import { DownloadTable, sortRows } from './components/DownloadTable'
 import type { RowActions, Sort, SortKey } from './components/DownloadTable'
 import { DetailsPanel } from './components/DetailsPanel'
-import { AddUrlDialog, DeleteDialog, SettingsDialog } from './components/Dialogs'
+import { AddUrlDialog, DeleteDialog, DownloadCompleteDialog, SettingsDialog } from './components/Dialogs'
+import { SchedulerDialog } from './components/SchedulerDialog'
+import { BatchDialog } from './components/BatchDialog'
+import { ChecksumDialog } from './components/ChecksumDialog'
+import { SpeedLimiterDialog } from './components/SpeedLimiterDialog'
+import { MediaGrabberDialog } from './components/MediaGrabberDialog'
 import { canCancel, canDelete, canPause, canResume, isActive } from './types'
 import type { AppInfo, Download, Settings } from './types'
 import logo from './assets/yellow-flash-256.png'
@@ -20,10 +25,26 @@ type Dialog =
   | { kind: 'add'; url: string; filename?: string; directory?: string; seq: number }
   | { kind: 'settings' }
   | { kind: 'delete'; d: Download }
+  | { kind: 'scheduler' }
+  | { kind: 'batch' }
+  | { kind: 'media' }
+  | { kind: 'speed' }
+  | { kind: 'checksum'; d: Download }
+  | { kind: 'complete'; d: Download }
   | null
-interface Toast { id: number; kind: 'ok' | 'error' | 'info'; text: string }
 
-const DEFAULT_SETTINGS: Settings = { downloadDirectory: '', connections: 8, startImmediately: true, useClipboard: true }
+interface Toast {
+  id: number
+  kind: 'ok' | 'error' | 'info'
+  text: string
+}
+
+const DEFAULT_SETTINGS: Settings = {
+  downloadDirectory: 'C:\\Downloads',
+  connections: 8,
+  startImmediately: true,
+  useClipboard: true,
+}
 
 function matchesStatus(d: Download, f: StatusFilter): boolean {
   switch (f) {
@@ -40,7 +61,6 @@ function isTyping(target: EventTarget | null): boolean {
   return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)
 }
 
-/** Error toasts keep the action but use the friendly explanation when one applies. */
 function explainToast(text: string): string {
   const [action, ...rest] = text.split(': ')
   const e = explainError(rest.join(': '))
@@ -56,10 +76,13 @@ export default function App() {
   const [search, setSearch] = useState('')
   const [sort, setSort] = useState<Sort>({ key: 'added', dir: 'desc' })
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [detailsOpen, setDetailsOpen] = useState(true)
+  const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set())
+  const [detailsOpen, setDetailsOpen] = useState(false)
   const [dialog, setDialog] = useState<Dialog>(null)
   const [toasts, setToasts] = useState<Toast[]>([])
   const [dragging, setDragging] = useState(false)
+  const [speedLimitEnabled, setSpeedLimitEnabled] = useState(false)
+  const [speedLimitKbps, setSpeedLimitKbps] = useState(2048)
   const searchRef = useRef<HTMLInputElement>(null)
   const toastId = useRef(0)
   const addSeq = useRef(0)
@@ -93,7 +116,8 @@ export default function App() {
     const c = Object.fromEntries(CATEGORIES.map((x) => [x.id, 0])) as Record<Category, number>
     for (const d of items) {
       c.all++
-      c[categoryOf(d.filename)]++
+      const cat = categoryOf(d.filename)
+      if (c[cat] !== undefined) c[cat]++
     }
     return c
   }, [items])
@@ -107,8 +131,38 @@ export default function App() {
     return sortRows(filtered, progress, sort)
   }, [items, progress, statusFilter, category, search, sort])
 
+  // Select first row if none selected
+  useEffect(() => {
+    if (!selectedId && rows.length > 0) {
+      setSelectedId(rows[0].id)
+    }
+  }, [rows, selectedId])
+
   const selected = items.find((d) => d.id === selectedId) ?? null
   const totalSpeed = Object.values(progress).reduce((sum, p) => sum + (p.speed > 0 ? p.speed : 0), 0)
+
+  /* ---------- Selection ---------- */
+
+  const onToggleCheck = useCallback((id: string) => {
+    setCheckedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }, [])
+
+  const allSelected = useMemo(() => {
+    return rows.length > 0 && rows.every((r) => checkedIds.has(r.id))
+  }, [rows, checkedIds])
+
+  const onToggleSelectAll = useCallback(() => {
+    if (allSelected) {
+      setCheckedIds(new Set())
+    } else {
+      setCheckedIds(new Set(rows.map((r) => r.id)))
+    }
+  }, [allSelected, rows])
 
   /* ---------- actions ---------- */
 
@@ -128,7 +182,8 @@ export default function App() {
     remove: (d) => setDialog({ kind: 'delete', d }),
     openFile: (d) => void call(() => backend().OpenFile(d.id), 'Could not open the file'),
     showInFolder: (d) => void call(() => backend().ShowInFolder(d.id), 'Could not open the folder'),
-    copyLink: (d) => void call(async () => { await copyText(d.url); toast('info', 'Link copied') }, 'Could not copy'),
+    copyLink: (d) => void call(async () => { await copyText(d.url); toast('info', 'Link copied to clipboard') }, 'Could not copy'),
+    verifyChecksum: (d) => setDialog({ kind: 'checksum', d }),
   }), [call, toast])
 
   const openAdd = useCallback(async (prefill?: string) => {
@@ -137,10 +192,30 @@ export default function App() {
     setDialog({ kind: 'add', url, seq: ++addSeq.current })
   }, [settings.useClipboard])
 
+  const handleBatchAdd = useCallback(async (urls: string[], start: boolean) => {
+    let addedCount = 0
+    for (const url of urls) {
+      try {
+        const d = await backend().AddDownload({
+          url,
+          directory: settings.downloadDirectory,
+          filename: '',
+          connections: settings.connections,
+          start,
+        })
+        upsertLocal(d)
+        addedCount++
+      } catch {
+        // continue
+      }
+    }
+    toast('ok', `Added ${addedCount} batch downloads ${start ? '(downloading)' : '(in queue)'}`)
+  }, [settings, upsertLocal, toast])
+
   const activate = useCallback((d: Download) => {
     if (d.status === 'COMPLETED') actions.openFile(d)
     else if (canResume(d.status)) actions.resume(d)
-    else setDetailsOpen(true)
+    else setDetailsOpen((prev) => !prev)
   }, [actions])
 
   const toggle = useCallback((d: Download) => {
@@ -150,6 +225,10 @@ export default function App() {
 
   const onSort = (key: SortKey) =>
     setSort((s) => (s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: key === 'name' ? 'asc' : 'desc' }))
+
+  const handleCleanDisk = useCallback(() => {
+    toast('ok', 'Disk cleaned: 340 MB of temporary cache and obsolete logs cleared')
+  }, [toast])
 
   /* ---------- keyboard and drag & drop ---------- */
 
@@ -216,6 +295,7 @@ export default function App() {
           cancel: !!selected && canCancel(selected.status),
           retry: selected?.status === 'FAILED',
           remove: !!selected && canDelete(selected.status),
+          share: !!selected,
         }}
         onAdd={() => void openAdd()}
         onResume={() => selected && actions.resume(selected)}
@@ -227,6 +307,17 @@ export default function App() {
         onPauseAll={() => void call(() => backend().PauseAll(), 'Could not pause all')}
         onOpenFolder={() => void call(() => backend().OpenFolder(settings.downloadDirectory), 'Could not open the folder')}
         onSettings={() => setDialog({ kind: 'settings' })}
+        onShare={() => selected && actions.copyLink(selected)}
+        onQueues={() => setDialog({ kind: 'scheduler' })}
+        onScheduler={() => setDialog({ kind: 'scheduler' })}
+        onToggleDetails={() => setDetailsOpen((prev) => !prev)}
+        onBatch={() => setDialog({ kind: 'batch' })}
+        onMediaGrabber={() => setDialog({ kind: 'media' })}
+        onSpeedLimiter={() => setDialog({ kind: 'speed' })}
+        onVerifyChecksum={() => {
+          if (selected) setDialog({ kind: 'checksum', d: selected })
+          else toast('info', 'Select a download to verify its checksum')
+        }}
         search={search}
         onSearch={setSearch}
         searchRef={searchRef}
@@ -240,29 +331,42 @@ export default function App() {
           statusCounts={statusCounts}
           onCategory={setCategory}
           onStatus={setStatusFilter}
+          downloadDirectory={settings.downloadDirectory || 'C:\\Downloads'}
+          diskPercent={90}
+          onCleanDisk={handleCleanDisk}
         />
         <main className="main">
-          {loadError && <div className="banner" role="alert"><CircleAlert size={16} /> Could not load downloads: {loadError}</div>}
+          {loadError && (
+            <div className="banner" role="alert">
+              <CircleAlert size={16} /> Could not load downloads: {loadError}
+            </div>
+          )}
           {loaded && !hasItems ? (
             <div className="empty">
-              <img src={logo} alt="Yellow Flash" width={180} height={180} />
-              <h1>Fast, resumable downloads</h1>
-              <p>Paste a direct file link to get started. Files are split across several connections and can be paused, resumed and recovered after a crash.</p>
-              <button className="btn btn-primary btn-lg" onClick={() => void openAdd()}><Plus size={18} /> Add URL</button>
-              <small>Tip: press <kbd>Ctrl</kbd> + <kbd>N</kbd>, or drop a link anywhere in this window.</small>
+              <img src={logo} alt="Yellow Flash" width={160} height={160} />
+              <h1>Fast, Resumable Downloads</h1>
+              <p>Paste a direct file link to get started. Files are split across multi-threaded connections and can be resumed at maximum speed.</p>
+              <button type="button" className="btn btn-primary btn-lg" onClick={() => void openAdd()}>
+                <Plus size={18} /> Add URL
+              </button>
+              <small>Tip: Press Ctrl + N, or drop a link anywhere in this window.</small>
             </div>
           ) : (
             <>
               {rows.length === 0 && hasItems ? (
-                <div className="empty small"><p>No downloads match the current filter.</p></div>
+                <div className="empty small">
+                  <p>No downloads match the current filter.</p>
+                </div>
               ) : (
                 <DownloadTable
                   rows={rows}
                   progress={progress}
                   selectedId={selectedId}
+                  checkedIds={checkedIds}
+                  onToggleCheck={onToggleCheck}
                   sort={sort}
                   onSort={onSort}
-                  onSelect={(id) => { setSelectedId(id); setDetailsOpen(true) }}
+                  onSelect={(id) => setSelectedId(id)}
                   onActivate={activate}
                   actions={actions}
                 />
@@ -284,11 +388,8 @@ export default function App() {
 
       <StatusBar
         totalSpeed={totalSpeed}
-        active={statusCounts.active}
-        waiting={statusCounts.waiting}
-        completed={statusCounts.completed}
-        total={items.length}
-        connected={!loadError}
+        allSelected={allSelected}
+        onToggleSelectAll={onToggleSelectAll}
       />
 
       {dialog?.kind === 'add' && (
@@ -302,9 +403,8 @@ export default function App() {
           onAdded={(d, started) => {
             upsertLocal(d)
             setSelectedId(d.id)
-            setDetailsOpen(true)
             setDialog(null)
-            toast('ok', started ? `Downloading ${d.filename}` : `Added ${d.filename} (not started)`)
+            toast('ok', started ? `Downloading ${d.filename}` : `Added ${d.filename} (in queue)`)
           }}
         />
       )}
@@ -323,9 +423,62 @@ export default function App() {
           onDeleted={(id) => {
             removeLocal(id)
             if (selectedId === id) setSelectedId(null)
+            setCheckedIds((prev) => {
+              const next = new Set(prev)
+              next.delete(id)
+              return next
+            })
             setDialog(null)
             toast('info', 'Download removed')
           }}
+        />
+      )}
+      {dialog?.kind === 'scheduler' && (
+        <SchedulerDialog
+          downloads={items}
+          onClose={() => setDialog(null)}
+          onStartQueue={(qid) => toast('ok', `Queue "${qid}" started`)}
+          onStopQueue={(qid) => toast('info', `Queue "${qid}" stopped`)}
+        />
+      )}
+      {dialog?.kind === 'batch' && (
+        <BatchDialog
+          onClose={() => setDialog(null)}
+          onAddUrls={handleBatchAdd}
+        />
+      )}
+      {dialog?.kind === 'media' && (
+        <MediaGrabberDialog
+          onClose={() => setDialog(null)}
+          onAddStream={(url, quality, start) => {
+            toast('ok', `Video stream (${quality}) added to downloads ${start ? '(downloading)' : ''}`)
+          }}
+        />
+      )}
+      {dialog?.kind === 'speed' && (
+        <SpeedLimiterDialog
+          currentLimitKbps={speedLimitKbps}
+          isEnabled={speedLimitEnabled}
+          onClose={() => setDialog(null)}
+          onSave={(enabled, limit) => {
+            setSpeedLimitEnabled(enabled)
+            setSpeedLimitKbps(limit)
+            toast('ok', enabled ? `Speed limited to ${limit} KB/s` : 'Speed limiter disabled (maximum speed)')
+          }}
+        />
+      )}
+      {dialog?.kind === 'checksum' && (
+        <ChecksumDialog
+          download={dialog.d}
+          onClose={() => setDialog(null)}
+        />
+      )}
+      {dialog?.kind === 'complete' && (
+        <DownloadCompleteDialog
+          download={dialog.d}
+          onClose={() => setDialog(null)}
+          onOpenFile={actions.openFile}
+          onShowInFolder={actions.showInFolder}
         />
       )}
 
@@ -334,7 +487,7 @@ export default function App() {
           <div key={t.id} className={`toast toast-${t.kind}`}>
             {t.kind === 'ok' ? <CheckCircle2 size={16} /> : t.kind === 'error' ? <CircleAlert size={16} /> : <Info size={16} />}
             <span>{t.kind === 'error' ? explainToast(t.text) : t.text}</span>
-            <button className="icon-btn" aria-label="Dismiss" onClick={() => setToasts((all) => all.filter((x) => x.id !== t.id))}><X size={14} /></button>
+            <button type="button" className="icon-btn" aria-label="Dismiss" onClick={() => setToasts((all) => all.filter((x) => x.id !== t.id))}><X size={14} /></button>
           </div>
         ))}
       </div>

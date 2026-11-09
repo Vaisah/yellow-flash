@@ -8,7 +8,9 @@ import type { Download, LinkInfo, Progress, Segment, Settings, Status } from '..
 
 type Listener = (...data: unknown[]) => void
 const ZERO = '0001-01-01T00:00:00Z'
+const KB = 1024
 const MB = 1024 * 1024
+const GB = 1024 * MB
 
 export function installMockBackend() {
   const listeners = new Map<string, Set<Listener>>()
@@ -26,26 +28,110 @@ export function installMockBackend() {
   }
 
   let seq = 0
-  const now = Date.now()
-  const iso = (offsetMin: number) => new Date(now - offsetMin * 60_000).toISOString()
+  const date2023 = new Date(2023, 7, 9, 14, 30).toISOString()
+  const today = new Date().toISOString()
+
   const make = (p: Partial<Download> & { filename: string; url: string; status: Status }): Download => ({
-    id: `mock-${++seq}`, finalUrl: p.url, filenameExplicit: false, destination: 'C:\\Users\\you\\Downloads',
-    tempPath: `C:\\Users\\you\\Downloads\\${p.filename}.part`, mimeType: '', etag: '"abc"', lastModified: '', error: '',
-    size: -1, downloaded: 0, rangeSupported: true, connections: 8, retries: 0, createdAt: iso(5), startedAt: ZERO,
-    completedAt: ZERO, updatedAt: iso(0), ...p,
+    id: `mock-${++seq}`,
+    finalUrl: p.url,
+    filenameExplicit: false,
+    destination: 'C:\\Downloads',
+    tempPath: `C:\\Downloads\\${p.filename}.part`,
+    mimeType: '',
+    etag: '"abc"',
+    lastModified: '',
+    error: '',
+    size: -1,
+    downloaded: 0,
+    rangeSupported: true,
+    connections: 8,
+    retries: 0,
+    createdAt: date2023,
+    startedAt: ZERO,
+    completedAt: ZERO,
+    updatedAt: date2023,
+    ...p,
   })
 
+  // Items precisely mirroring the UI showcase in the user's reference design
   const items: Download[] = [
-    make({ filename: 'ubuntu-24.04.1-desktop-amd64.iso', url: 'https://releases.ubuntu.com/24.04/ubuntu-24.04.1-desktop-amd64.iso', status: 'DOWNLOADING', size: 5900 * MB, downloaded: 2200 * MB, createdAt: iso(12), startedAt: iso(12) }),
-    make({ filename: 'Big Buck Bunny 1080p.mp4', url: 'https://download.blender.org/peach/bigbuckbunny_movies/big_buck_bunny_1080p_h264.mov', status: 'DOWNLOADING', size: 263 * MB, downloaded: 190 * MB, connections: 4, createdAt: iso(3), startedAt: iso(3) }),
-    make({ filename: 'project-archive.zip', url: 'https://files.example.com/backups/project-archive.zip', status: 'PAUSED', size: 1229 * MB, downloaded: 664 * MB, createdAt: iso(90) }),
-    make({ filename: 'report-final.pdf', url: 'https://docs.example.com/report-final.pdf', status: 'QUEUED', createdAt: iso(1) }),
-    make({ filename: 'node-v22.11.0-x64.msi', url: 'https://nodejs.org/dist/v22.11.0/node-v22.11.0-x64.msi', status: 'COMPLETED', size: 28 * MB, downloaded: 28 * MB, createdAt: iso(300), completedAt: iso(298) }),
-    make({ filename: 'Valve-SteamDeck.jpg', url: 'https://static0.xdaimages.com/wordpress/wp-content/uploads/2021/07/Valve-SteamDeck.jpg', status: 'COMPLETED', size: 62811, downloaded: 62811, createdAt: iso(1500), completedAt: iso(1500) }),
-    make({ filename: 'A Monster\'s Expedition [1.03].pkg', url: 'https://archive.org/download/collection/A%20Monster%27s%20Expedition.pkg', status: 'FAILED', error: 'metadata: HTTP 403 Forbidden', createdAt: iso(2000) }),
-    make({ filename: 'watch', url: 'https://www.youtube.com/watch?v=pdWh982UxQg', status: 'FAILED', error: 'the link points to a web page, not a downloadable file (server sent text/html; charset=utf-8)', createdAt: iso(2100) }),
+    make({
+      filename: 'UIUXMonster.png',
+      url: 'https://cdn.example.com/assets/UIUXMonster.png',
+      status: 'COMPLETED',
+      size: 745 * KB,
+      downloaded: 745 * KB,
+      createdAt: date2023,
+      completedAt: date2023,
+    }),
+    make({
+      filename: '2pacCover.mp3',
+      url: 'https://music.example.com/tracks/2pacCover.mp3',
+      status: 'DOWNLOADING',
+      size: 3 * MB,
+      downloaded: Math.round(3 * MB * 0.8),
+      createdAt: date2023,
+      startedAt: date2023,
+    }),
+    make({
+      filename: 'UIUXMonster.Zip',
+      url: 'https://downloads.example.com/zips/UIUXMonster.Zip',
+      status: 'COMPLETED',
+      size: 12 * MB,
+      downloaded: 12 * MB,
+      createdAt: date2023,
+      completedAt: date2023,
+    }),
+    make({
+      filename: 'Details.pdf',
+      url: 'https://docs.example.com/files/Details.pdf',
+      status: 'DOWNLOADING',
+      size: 2 * MB,
+      downloaded: 1 * MB,
+      createdAt: date2023,
+      startedAt: date2023,
+    }),
+    make({
+      filename: 'Better.Call Saul.so2E10.720p.mp3',
+      url: 'https://media.example.com/series/Better.Call.Saul.so2E10.720p.mp3',
+      status: 'QUEUED',
+      size: 2.5 * GB,
+      downloaded: 0,
+      createdAt: date2023,
+    }),
+    make({
+      filename: 'Call Of Duty.apk',
+      url: 'https://apks.example.com/games/Call_Of_Duty.apk',
+      status: 'PAUSED',
+      size: 12 * MB,
+      downloaded: Math.round(12 * MB * 0.45),
+      createdAt: date2023,
+    }),
+    make({
+      filename: '2pacCover.mp3',
+      url: 'https://archive.example.com/audio/2pacCover.mp3',
+      status: 'DOWNLOADING',
+      size: 12 * MB,
+      downloaded: Math.round(12 * MB * 0.1),
+      createdAt: today,
+      startedAt: today,
+    }),
+    make({
+      filename: 'Mima.exe',
+      url: 'https://software.example.com/installers/Mima.exe',
+      status: 'COMPLETED',
+      size: 32 * MB,
+      downloaded: 32 * MB,
+      createdAt: date2023,
+      completedAt: date2023,
+    }),
   ]
-  const speeds = new Map<string, number>([[items[0].id, 9.4 * MB], [items[1].id, 3.1 * MB]])
+
+  const speeds = new Map<string, number>([
+    [items[1].id, 1.4 * MB],
+    [items[3].id, 0.4 * MB],
+    [items[6].id, 1.1 * MB],
+  ])
   const started = new Map<string, number>()
 
   const segmentsFor = (d: Download): Segment[] => {
@@ -79,12 +165,19 @@ export function installMockBackend() {
         setStatus(d, 'DOWNLOADING')
       }
       if (d.status !== 'DOWNLOADING') continue
-      const base = speeds.get(d.id) ?? 4 * MB
-      const speed = base * (0.8 + Math.random() * 0.4)
+      const base = speeds.get(d.id) ?? 1.2 * MB
+      const speed = base * (0.9 + Math.random() * 0.2)
       d.downloaded = Math.min(d.size, d.downloaded + Math.round(speed / 4))
+      const eta = d.id === items[3].id ? 312 : Math.max(0, (d.size - d.downloaded) / speed)
       const p: Progress = {
-        downloadId: d.id, downloaded: d.downloaded, total: d.size, percent: (d.downloaded / d.size) * 100,
-        speed, averageSpeed: base, etaSeconds: (d.size - d.downloaded) / speed, activeConnections: d.connections,
+        downloadId: d.id,
+        downloaded: d.downloaded,
+        total: d.size,
+        percent: (d.downloaded / d.size) * 100,
+        speed,
+        averageSpeed: base,
+        etaSeconds: eta,
+        activeConnections: d.connections,
       }
       publish(d)
       emit('downloads:progress', p)
@@ -96,7 +189,7 @@ export function installMockBackend() {
         }, 600)
       }
     }
-  }, 250)
+  }, 350)
 
   const find = (id: string) => {
     const d = items.find((x) => x.id === id)
@@ -110,7 +203,7 @@ export function installMockBackend() {
     started.set(d.id, Date.now())
     setStatus(d, 'INITIALIZING')
   }
-  let settings: Settings = { downloadDirectory: 'C:\\Users\\you\\Downloads', connections: 8, startImmediately: true, useClipboard: true }
+  let settings: Settings = { downloadDirectory: 'C:\\Downloads', connections: 8, startImmediately: true, useClipboard: true }
 
   const unwrap = (raw: string) => {
     try {
@@ -122,7 +215,7 @@ export function installMockBackend() {
   }
 
   const app: AppBindings = {
-    Info: () => later({ name: 'Yellow Flash', version: '0.2.0-dev', dataDir: 'C:\\Users\\you\\AppData\\Roaming\\Yellow Flash' }),
+    Info: () => later({ name: 'Yellow Flash', version: '10.36', dataDir: 'C:\\Downloads' }),
     ListDownloads: () => later(items.map((d) => ({ ...d }))),
     GetDownload: async (id) => ({ ...find(id) }),
     async InspectLink(raw) {
@@ -176,7 +269,7 @@ export function installMockBackend() {
     OpenFile: async () => undefined,
     ShowInFolder: async () => undefined,
     OpenFolder: async () => undefined,
-    SelectDirectory: () => later('D:\\Downloads'),
+    SelectDirectory: () => later('C:\\Downloads'),
     ClipboardURL: () => later(''),
     GetSettings: () => later({ ...settings }),
     async SaveSettings(s) {

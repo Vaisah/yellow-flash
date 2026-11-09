@@ -10,7 +10,14 @@ export function formatBytes(n: number): string {
     v /= 1024
     i++
   }
-  return `${v.toFixed(v >= 100 ? 0 : v >= 10 ? 1 : 2)} ${UNITS[i]}`
+  // Matches screenshot formatting (e.g. 745 KB, 3.00 MB, 12.00 MB, 2 MB, 2.5 GB)
+  let decimals = 2
+  if (v >= 100 || v % 1 === 0) {
+    decimals = 0
+  } else if (v >= 10) {
+    decimals = v % 1 === 0 ? 0 : 2
+  }
+  return `${v.toFixed(decimals)} ${UNITS[i]}`
 }
 
 export function formatSpeed(bytesPerSecond: number): string {
@@ -19,15 +26,15 @@ export function formatSpeed(bytesPerSecond: number): string {
 }
 
 export function formatEta(seconds: number): string {
-  if (seconds < 0 || !Number.isFinite(seconds)) return '—'
-  if (seconds < 1) return 'now'
+  if (seconds === undefined || seconds === null || seconds < 0 || !Number.isFinite(seconds)) return '0 Sec'
+  if (seconds <= 0) return '0 Sec'
   const s = Math.round(seconds)
   const h = Math.floor(s / 3600)
   const m = Math.floor((s % 3600) / 60)
   const sec = s % 60
-  if (h > 0) return `${h}h ${m}m`
-  if (m > 0) return `${m}m ${sec}s`
-  return `${sec}s`
+  if (h > 0) return `${h} Hr ${m} Min`
+  if (m > 0) return `${m} Min ${sec} Sec`
+  return `${sec} Sec`
 }
 
 /** Go encodes zero times as year 1; treat those as unset. */
@@ -42,11 +49,18 @@ export function formatDate(iso: string): string {
   if (!d) return '—'
   const today = new Date()
   if (d.toDateString() === today.toDateString()) {
-    return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+    return 'Today'
   }
-  return d.toLocaleDateString(undefined, {
-    day: 'numeric', month: 'short', year: d.getFullYear() === today.getFullYear() ? undefined : 'numeric',
-  })
+  const year = d.getFullYear()
+  const month = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${year}/${month}/${day}`
+}
+
+export function formatMbs(bytesPerSecond: number): string {
+  if (!bytesPerSecond || bytesPerSecond <= 0) return '0.00 Mbs'
+  const mbps = (bytesPerSecond * 8) / 1_000_000
+  return `${mbps.toFixed(2)} Mbs`
 }
 
 export function percentOf(done: number, total: number): number {
