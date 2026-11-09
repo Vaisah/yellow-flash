@@ -174,6 +174,7 @@ type ftpConn struct {
 	prot    bool // data connections are TLS too
 	epsv    bool
 	rest    bool
+	active  bool   // data connections come from the server (PORT/EPRT)
 	remote  string // the control connection's peer IP, for PASV
 	dial    func(ctx context.Context, network, addr string) (net.Conn, error)
 	stopped bool
@@ -203,7 +204,7 @@ func (t *ftpTransport) connect(ctx context.Context, s ftpSite) (*ftpConn, error)
 	if err != nil {
 		return nil, err
 	}
-	c := &ftpConn{conn: raw, site: s, dial: t.dial}
+	c := &ftpConn{conn: raw, site: s, dial: t.dial, active: t.active}
 	if host, _, err := net.SplitHostPort(raw.RemoteAddr().String()); err == nil {
 		c.remote = host
 	}
@@ -336,8 +337,56 @@ func (c *ftpConn) openData(ctx context.Context) (net.Conn, error) {
 	return c.dial(ctx, "tcp", net.JoinHostPort(c.remote, port))
 }
 
+// listenActive opens a listener for an active data connection on the
+// control connection's own local address and tells the server where it is
+// (PORT for IPv4, EPRT for IPv6).
+func (c *ftpConn) listenActive() (*net.TCPListener, error) {
+	host, _, err := net.SplitHostPort(c.conn.LocalAddr().String())
+	if err != nil {
+		return nil, err
+	}
+	ln, err := net.Listen("tcp", net.JoinHostPort(host, "0"))
+	if err != nil {
+		return nil, err
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	ip := net.ParseIP(host)
+	if v4 := ip.To4(); v4 != nil {
+		_, _, err = c.cmd(200, "PORT %d,%d,%d,%d,%d,%d", v4[0], v4[1], v4[2], v4[3], port/256, port%256)
+	} else {
+		_, _, err = c.cmd(200, "EPRT |2|%s|%d|", host, port)
+	}
+	if err != nil {
+		_ = ln.Close()
+		return nil, err
+	}
+	return ln.(*net.TCPListener), nil
+}
+
+// acceptActive takes the server's data connection, only from the control
+// connection's peer: no other host can inject a data stream.
+func (c *ftpConn) acceptActive(ctx context.Context, ln *net.TCPListener) (net.Conn, error) {
+	defer ln.Close()
+	stop := context.AfterFunc(ctx, func() { _ = ln.Close() })
+	defer stop()
+	_ = ln.SetDeadline(time.Now().Add(ftpTimeout))
+	for {
+		dc, err := ln.Accept()
+		if err != nil {
+			return nil, fmt.Errorf("ftp: the server did not connect back (active mode): %w", err)
+		}
+		if host, _, _ := net.SplitHostPort(dc.RemoteAddr().String()); host == c.remote {
+			return dc, nil
+		}
+		_ = dc.Close()
+	}
+}
+
 // retr starts sending the file from offset on a new data connection.
 func (c *ftpConn) retr(ctx context.Context, offset int64) (net.Conn, error) {
+	if c.active {
+		return c.retrActive(ctx, offset)
+	}
 	dc, err := c.openData(ctx)
 	if err != nil {
 		return nil, err
@@ -360,6 +409,38 @@ func (c *ftpConn) retr(ctx context.Context, offset int64) (net.Conn, error) {
 			return fail(fmt.Errorf("ftp data TLS: %w", err))
 		}
 		dc = tc
+	}
+	return dc, nil
+}
+
+// retrActive is retr with an active data connection: the server connects
+// to us after RETR.
+func (c *ftpConn) retrActive(ctx context.Context, offset int64) (net.Conn, error) {
+	ln, err := c.listenActive()
+	if err != nil {
+		return nil, err
+	}
+	if offset > 0 {
+		if _, _, err := c.cmd(350, "REST %d", offset); err != nil {
+			_ = ln.Close()
+			return nil, err
+		}
+	}
+	if _, _, err := c.cmd(1, "RETR %s", c.site.path); err != nil {
+		_ = ln.Close()
+		return nil, err
+	}
+	dc, err := c.acceptActive(ctx, ln)
+	if err != nil {
+		return nil, err
+	}
+	if c.prot {
+		tcl := tls.Client(dc, c.tlsCfg)
+		if err := tcl.HandshakeContext(ctx); err != nil {
+			_ = dc.Close()
+			return nil, fmt.Errorf("ftp data TLS: %w", err)
+		}
+		dc = tcl
 	}
 	return dc, nil
 }
@@ -395,6 +476,7 @@ type ftpTransport struct {
 	dial    func(ctx context.Context, network, addr string) (net.Conn, error)
 	roots   *x509.CertPool
 	tickets tls.ClientSessionCache // data connections resume the control's TLS session
+	active  bool                   // active data connections (PORT/EPRT)
 
 	mu   sync.Mutex
 	idle map[string][]idleFTP

@@ -118,6 +118,34 @@ type session struct {
 	prot    bool
 	rest    int64
 	passive net.Listener
+	active  string // PORT/EPRT: where to connect for the next transfer
+}
+
+// activeAddress reads PORT h1,h2,h3,h4,p1,p2 or EPRT |af|ip|port|.
+func activeAddress(cmd, arg string) (string, bool) {
+	if cmd == "PORT" {
+		f := strings.Split(arg, ",")
+		if len(f) != 6 {
+			return "", false
+		}
+		n := make([]int, 6)
+		for i, s := range f {
+			v, err := strconv.Atoi(strings.TrimSpace(s))
+			if err != nil || v < 0 || v > 255 {
+				return "", false
+			}
+			n[i] = v
+		}
+		return net.JoinHostPort(fmt.Sprintf("%d.%d.%d.%d", n[0], n[1], n[2], n[3]), strconv.Itoa(n[4]*256+n[5])), true
+	}
+	if len(arg) < 2 {
+		return "", false
+	}
+	f := strings.Split(arg[1:len(arg)-1], arg[:1])
+	if len(f) != 3 {
+		return "", false
+	}
+	return net.JoinHostPort(f[1], f[2]), true
 }
 
 func (ss *session) reply(format string, args ...any) {
@@ -238,6 +266,14 @@ func (ss *session) file(cmd, arg string) {
 			// control connection's.
 			ss.reply("227 Entering Passive Mode (10,9,8,7,%d,%d)", port/256, port%256)
 		}
+	case "PORT", "EPRT":
+		addr, ok := activeAddress(cmd, arg)
+		if !ok {
+			ss.reply("501 Bad address")
+			return
+		}
+		ss.active = addr
+		ss.reply("200 %s OK", cmd)
 	case "REST":
 		n, err := strconv.ParseInt(arg, 10, 64)
 		if ss.s.NoRest || err != nil {
@@ -254,20 +290,30 @@ func (ss *session) file(cmd, arg string) {
 			ss.reply("550 %s: No such file", arg)
 			return
 		}
-		if ss.passive == nil {
-			ss.reply("425 Use PASV first")
+		var dc net.Conn
+		var err error
+		switch {
+		case ss.active != "":
+			ss.reply("150 Opening BINARY mode data connection (active)")
+			dc, err = net.DialTimeout("tcp", ss.active, 5*time.Second)
+			ss.active = ""
+		case ss.passive != nil:
+			_ = ss.passive.(*net.TCPListener).SetDeadline(time.Now().Add(5 * time.Second))
+			dc, err = ss.passive.Accept()
+			_ = ss.passive.Close()
+			ss.passive = nil
+			if err == nil {
+				ss.reply("150 Opening BINARY mode data connection")
+			}
+		default:
+			ss.reply("425 Use PASV or PORT first")
 			return
 		}
-		_ = ss.passive.(*net.TCPListener).SetDeadline(time.Now().Add(5 * time.Second))
-		dc, err := ss.passive.Accept()
-		_ = ss.passive.Close()
-		ss.passive = nil
 		if err != nil {
 			ss.reply("425 No data connection")
 			return
 		}
 		ss.s.Retrs.Add(1)
-		ss.reply("150 Opening BINARY mode data connection")
 		if ss.prot {
 			tc := tls.Server(dc, ss.s.TLS)
 			if tc.Handshake() != nil {

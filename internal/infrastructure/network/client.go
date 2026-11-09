@@ -47,6 +47,26 @@ type Options struct {
 	PACScript string
 	// RootCAs verifies FTPS servers; nil uses the system's.
 	RootCAs *x509.CertPool
+	// Proxy is "" for the system's proxy settings, "direct" for none, or a
+	// fixed proxy ("http://host:port", "https://…", "socks5://…"). A
+	// PACScript wins over it.
+	Proxy string
+	// FTPActive makes FTP data connections active (PORT/EPRT) instead of
+	// passive.
+	FTPActive bool
+}
+
+// ParseProxy checks a fixed proxy address.
+func ParseProxy(raw string) (*url.URL, error) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Hostname() == "" {
+		return nil, fmt.Errorf("%w: not a proxy address: %q", ErrUnsafeURL, raw)
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https", "socks5", "socks5h":
+		return u, nil
+	}
+	return nil, fmt.Errorf("%w: proxy scheme %q (use http, https or socks5)", ErrUnsafeURL, u.Scheme)
 }
 
 func (o Options) withDefaults() Options {
@@ -84,8 +104,15 @@ func NewClient(opts Options) *http.Client {
 	opts = opts.withDefaults()
 	dialer := &net.Dialer{Timeout: opts.DialTimeout, KeepAlive: 30 * time.Second}
 	proxy := http.ProxyFromEnvironment
-	if opts.PACScript != "" {
+	switch p := strings.TrimSpace(opts.Proxy); {
+	case opts.PACScript != "":
 		proxy = pacProxy(opts.PACScript)
+	case strings.EqualFold(p, "direct"):
+		proxy = nil
+	case p != "":
+		if u, err := ParseProxy(p); err == nil {
+			proxy = http.ProxyURL(u)
+		}
 	}
 	if !opts.AllowPrivate {
 		dialer.Control = func(_, address string, _ syscall.RawConn) error {
@@ -119,6 +146,7 @@ func NewClient(opts Options) *http.Client {
 	// FTP, FTPS and FTPES through the same dialer: the chosen DNS, the
 	// address race and the dial policy apply to them too.
 	ftp := newFTPTransport(hosts.DialContext, opts.RootCAs)
+	ftp.active = opts.FTPActive
 	for _, scheme := range []string{"ftp", "ftps", "ftpes"} {
 		transport.RegisterProtocol(scheme, ftp)
 	}

@@ -133,6 +133,27 @@ func TestARunawayPACScriptIsStopped(t *testing.T) {
 	}
 }
 
+func TestAFixedProxyOrNone(t *testing.T) {
+	var proxied bool
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { proxied = true }))
+	defer proxy.Close()
+	direct := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer direct.Close()
+	res, err := NewClient(Options{AllowPrivate: true, Proxy: proxy.URL}).Get(direct.URL)
+	if err != nil || !proxied {
+		t.Fatalf("fixed proxy not used: %v", err)
+	}
+	_ = res.Body.Close()
+	for _, bad := range []string{"ftp://p:1", "nohost", "socks4://p:1"} {
+		if _, err := ParseProxy(bad); err == nil {
+			t.Errorf("%s accepted", bad)
+		}
+	}
+	if _, err := ParseProxy("socks5://127.0.0.1:1080"); err != nil {
+		t.Error(err)
+	}
+}
+
 // A client with a PAC script sends each request where the script says.
 func TestAClientFollowsItsPACScript(t *testing.T) {
 	var viaProxy string

@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/vaisah/internal/application/datacap"
 	"github.com/vaisah/internal/application/download"
 	"github.com/vaisah/internal/application/events"
 	"github.com/vaisah/internal/application/queues"
@@ -45,6 +46,7 @@ type App struct {
 	// queues runs the download queues and their schedules (set once the
 	// engine is up; read by the engine's event publisher).
 	queues     atomic.Pointer[queues.Runner]
+	dataCap    atomic.Pointer[datacap.Watcher]
 	stopQueues context.CancelFunc
 
 	// Commands from the IPC channel wait here until the UI is ready.
@@ -116,7 +118,13 @@ func (a *App) Startup(ctx context.Context) {
 	})
 	// URLs typed by the user may legitimately point at LAN hosts (NAS,
 	// intranet). Browser-originated requests will use a restricted client.
-	manager, err := engine.New(a.store, engine.Config{AllowPrivateNetworks: true, Publisher: publisher, HostLimits: a.store})
+	// DNS, proxy and FTP mode from the saved network settings.
+	dns, netOpts, err := a.engineNetwork(ctx)
+	if err != nil {
+		runtime.LogErrorf(ctx, "network settings: %v", err)
+	}
+	manager, err := engine.New(a.store, engine.Config{AllowPrivateNetworks: true, Publisher: publisher,
+		HostLimits: a.store, DNS: dns, Network: netOpts})
 	if err != nil {
 		runtime.LogErrorf(ctx, "start download engine: %v", err)
 		return
@@ -137,6 +145,18 @@ func (a *App) Startup(ctx context.Context) {
 	a.stopQueues = cancel
 	runner.Startup(qctx)
 	go runner.Run(qctx)
+
+	// Download limits (a data cap) and the global speed limit.
+	cap := datacap.New(a.manager, nil)
+	cap.OnChange = func(blocked bool, until time.Time) {
+		runtime.EventsEmit(ctx, "datacap:changed", map[string]any{"blocked": blocked, "until": until})
+		if blocked {
+			a.notice(ctx, "info", "The download limit is reached: downloads wait until "+until.Local().Format("15:04"))
+		}
+	}
+	a.dataCap.Store(cap)
+	a.applyLiveSettings(a.GetNetworkSettings())
+	go cap.Run(qctx)
 }
 
 // queueDone does what a finished queue's schedule asks.

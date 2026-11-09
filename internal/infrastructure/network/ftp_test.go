@@ -195,6 +195,19 @@ func TestFTPSExplicitAndImplicit(t *testing.T) {
 	}
 }
 
+func TestFTPActiveMode(t *testing.T) {
+	data := payloadBytes(200 << 10)
+	srv := ftptest.New(t, map[string][]byte{"f": data}, nil)
+	c := NewClient(Options{AllowPrivate: true, FTPActive: true})
+	res, body := get(t, c, "ftp://"+srv.Addr+"/f", http.Header{"Range": {"bytes=100-"}})
+	if res.StatusCode != 206 || !bytes.Equal(body, data[100:]) {
+		t.Fatalf("active: %d %d bytes", res.StatusCode, len(body))
+	}
+	if res, body = get(t, c, "ftp://"+srv.Addr+"/f", nil); res.StatusCode != 200 || !bytes.Equal(body, data) {
+		t.Fatalf("active, again on the pooled session: %d", res.StatusCode)
+	}
+}
+
 func TestFTPKeepsTheDialPolicy(t *testing.T) {
 	srv := ftptest.New(t, map[string][]byte{"f": []byte("x")}, nil)
 	_, err := NewClient(Options{}).Get("ftp://" + srv.Addr + "/f")

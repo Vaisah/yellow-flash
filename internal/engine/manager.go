@@ -74,7 +74,14 @@ type Config struct {
 	HostLimitDecay time.Duration
 	// DNS is the resolver the default client uses; nil is the system's.
 	DNS *network.DNSChoice
+	// Network tunes the default client: proxy, PAC script, FTP active
+	// mode. AllowPrivate, MaxConnsPerHost and DNS come from the fields
+	// above.
+	Network network.Options
 }
+
+// BytesReceived counts every byte the downloads have received so far.
+func (m *Manager) BytesReceived() int64 { return m.limiter.Taken() }
 
 const (
 	hardMaxConnections = 32
@@ -106,7 +113,9 @@ func (c Config) withDefaults() Config {
 		c.HostLimitDecay = hostLimitDecay
 	}
 	if c.Client == nil {
-		c.Client = network.NewClient(network.Options{AllowPrivate: c.AllowPrivateNetworks, MaxConnsPerHost: c.MaxConnections * 2, DNS: c.DNS})
+		opts := c.Network
+		opts.AllowPrivate, opts.MaxConnsPerHost, opts.DNS = c.AllowPrivateNetworks, c.MaxConnections*2, c.DNS
+		c.Client = network.NewClient(opts)
 	}
 	if c.Prober == nil {
 		c.Prober = network.NewProber(c.Client)
