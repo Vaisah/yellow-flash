@@ -17,7 +17,7 @@ import (
 	domain "github.com/vaisah/internal/domain/download"
 	"github.com/vaisah/internal/engine"
 	"github.com/vaisah/internal/infrastructure/network"
-	"github.com/vaisah/internal/infrastructure/persistence/sqlite"
+	"github.com/vaisah/internal/infrastructure/persistence/jsonstore"
 )
 
 // The engine must satisfy the application port.
@@ -57,7 +57,7 @@ type env struct {
 	t      *testing.T
 	dir    string
 	dbPath string
-	store  *sqlite.Store
+	store  *jsonstore.Store
 	mgr    *engine.Manager
 	svc    *appdownload.Service
 	events *recorder
@@ -71,7 +71,7 @@ func fastRetry(maxRetries int) *engine.RetryPolicy {
 
 func newEnv(t *testing.T, tweak func(*engine.Config)) *env {
 	t.Helper()
-	e := &env{t: t, dir: filepath.Join(t.TempDir(), "downloads"), dbPath: filepath.Join(t.TempDir(), "state.db"), events: &recorder{}}
+	e := &env{t: t, dir: filepath.Join(t.TempDir(), "downloads"), dbPath: filepath.Join(t.TempDir(), "downloads.json"), events: &recorder{}}
 	e.client = network.NewClient(network.Options{AllowPrivate: true})
 	e.cfg = engine.Config{
 		Connections: 4, MinSegmentSize: 16 << 10, Retry: fastRetry(4), Client: e.client, Publisher: e.events,
@@ -87,7 +87,7 @@ func newEnv(t *testing.T, tweak func(*engine.Config)) *env {
 
 func (e *env) open() {
 	e.t.Helper()
-	store, err := sqlite.Open(e.dbPath)
+	store, err := jsonstore.Open(e.dbPath)
 	if err != nil {
 		e.t.Fatal(err)
 	}

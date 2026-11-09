@@ -17,7 +17,7 @@ import (
 	domain "github.com/vaisah/internal/domain/download"
 	"github.com/vaisah/internal/engine"
 	"github.com/vaisah/internal/infrastructure/filesystem"
-	"github.com/vaisah/internal/infrastructure/persistence/sqlite"
+	"github.com/vaisah/internal/infrastructure/persistence/jsonstore"
 )
 
 // 1. Successful normal download (single connection) with integrity.
@@ -453,7 +453,7 @@ func TestCrashRecovery(t *testing.T) {
 	_ = crashed.store.Close()           // the process can no longer persist anything
 	before := fs.bytesServed.Load()
 
-	store, err := sqlite.Open(crashed.dbPath)
+	store, err := jsonstore.Open(crashed.dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -528,7 +528,7 @@ func TestCrashRecoveryClampsToFile(t *testing.T) {
 	if err = os.WriteFile(created.TempPath, data[:onDisk], 0o600); err != nil {
 		t.Fatal(err)
 	}
-	store, err := sqlite.Open(e.dbPath)
+	store, err := jsonstore.Open(e.dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}

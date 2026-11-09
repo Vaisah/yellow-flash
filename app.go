@@ -17,7 +17,7 @@ import (
 	domain "github.com/vaisah/internal/domain/download"
 	"github.com/vaisah/internal/engine"
 	"github.com/vaisah/internal/infrastructure/network"
-	"github.com/vaisah/internal/infrastructure/persistence/sqlite"
+	"github.com/vaisah/internal/infrastructure/persistence/jsonstore"
 	"github.com/vaisah/internal/ipc"
 	"github.com/vaisah/internal/platform"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -37,7 +37,7 @@ var errNotReady = errors.New("application is not ready")
 type App struct {
 	ctx     context.Context
 	service *download.Service
-	store   *sqlite.Store
+	store   *jsonstore.Store
 	manager *engine.Manager
 	dataDir string
 
@@ -48,7 +48,7 @@ type App struct {
 	closing  atomic.Bool
 }
 
-// Settings are user preferences persisted in SQLite.
+// Settings are user preferences persisted in the download list (downloads.json).
 type Settings struct {
 	DownloadDirectory string `json:"downloadDirectory"`
 	Connections       int    `json:"connections"`
@@ -85,7 +85,7 @@ func NewApp(dataDir string) (*App, error) {
 	if err := ipc.PrivateDir(dataDir); err != nil {
 		return nil, err
 	}
-	store, err := sqlite.Open(filepath.Join(dataDir, "downloads.db"))
+	store, err := jsonstore.Open(filepath.Join(dataDir, "downloads.json"))
 	if err != nil {
 		return nil, err
 	}

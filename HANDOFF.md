@@ -4,7 +4,7 @@ Last updated: 2026-11-06. Read this first, then `README.md` (setup and architect
 
 ## 1. Where the project stands
 
-The goal is a cross-platform (Windows and Linux) download manager that competes with Internet Download Manager. It has a Go engine, a Wails v2 desktop shell, a React + TypeScript UI, SQLite storage, and (later) browser extensions.
+The goal is a cross-platform (Windows and Linux) download manager that competes with Internet Download Manager. It has a Go engine, a Wails v2 desktop shell, a React + TypeScript UI, JSON storage (a `downloads.json` list, as Mister Download Manager keeps), and (later) browser extensions.
 
 | Phase | Scope | Status |
 |---|---|---|
@@ -20,7 +20,7 @@ The goal is a cross-platform (Windows and Linux) download manager that competes 
 ## 2. Getting started
 
 **Prerequisites**
-- Go 1.26 or later. No cgo is needed: SQLite is the pure-Go `modernc.org/sqlite`.
+- Go 1.26 or later. No cgo is needed.
 - Node 22 or later.
 - Wails CLI v2.15.0: `go install github.com/wailsapp/wails/v2/cmd/wails@v2.15.0`.
 - Windows: WebView2 (built into Windows 11).
@@ -65,7 +65,7 @@ internal/
                             worker (segment pool + single stream), retry, progress, resume …
   infrastructure/network    hardened HTTP client (SSRF dial guard), Prober, Content-Range, UnwrapLink
   infrastructure/filesystem filename sanitising, .part files, no-overwrite Publisher
-  infrastructure/persistence/sqlite   migrations + repositories (implements domain.Store)
+  infrastructure/persistence/jsonstore downloads.json + resume files, as MDM (implements domain.Store)
   infrastructure/persistence/memory   in-memory domain.Store (tests, CLI without -db)
   platform/                 SecretStore, OpenPath/RevealPath (OS-specific files are build-tagged)
 tests/integration/          end-to-end tests against a configurable httptest server
@@ -77,7 +77,7 @@ tests/integration/          end-to-end tests against a configurable httptest ser
 2. **Durability ordering.** Read the byte counters, then `fsync` the `.part` file, then persist those counters. Saved progress must never exceed data that is on disk. See `checkpoint` in `worker.go`.
 3. **Representation identity.** Partial data is reused only when size and ETag/Last-Modified match. Otherwise the engine restarts from zero (`representationChanged`, `If-Range`).
 4. **Never overwrite.** `filesystem.Publisher` publishes as `name (n).ext` on a clash. The temp file is `name.part` with mode 0600.
-5. **Dependencies point inward.** The engine imports domain, `events`, `platform`, `network` and `filesystem`, but never SQLite, Wails or OS APIs. OS-specific code goes in build-tagged files under `infrastructure/network` or `platform`.
+5. **Dependencies point inward.** The engine imports domain, `events`, `platform`, `network` and `filesystem`, but never the store, Wails or OS APIs. OS-specific code goes in build-tagged files under `infrastructure/network` or `platform`.
 6. **Credentials are never persisted or logged.** `Authorization`, `Cookie` and `Proxy-Authorization` live only in `platform.SecretStore`, which is currently in memory.
 
 **Data flow of one download.**
@@ -98,7 +98,7 @@ tests/integration/          end-to-end tests against a configurable httptest ser
 - Pause, resume, cancel and retry. Crash recovery: active downloads become PAUSED, and progress is clamped to the length of the temp file.
 - Retry policy: exponential backoff with jitter, Retry-After honoured. Errors are classified as timeout, reset, network, HTTP or permanent. Idle-read timeout.
 - Progress: EWMA speed, average speed, ETA only when known, active connections.
-- SQLite: pragmas in the DSN (FK, WAL, busy timeout); transactional versioned migrations (v1→v2); repositories for downloads, segments, headers, settings and queues.
+- Storage: originally SQLite; replaced on 2026-11-09 by `jsonstore` (downloads.json with generations, resume/<id>.json per download), ported from MDM.
 - Security: URL validation, SSRF guard at dial time (covers redirects and DNS rebinding), filename sanitising, header-injection guard.
 
 ### Phase 2: desktop app (done)
@@ -108,7 +108,7 @@ tests/integration/          end-to-end tests against a configurable httptest ser
 - **Backend additions**:
   - `Manager.Inspect`, `network.UnwrapLink` (Google, Facebook and YouTube redirects).
   - `Service.ResumeAll/PauseAll`.
-  - Settings stored in SQLite.
+  - Settings stored in the download list.
   - `platform.OpenPath/RevealPath`.
 - **Engine fixes found against real servers:**
   - **Bogus HEAD length.** The GET length now overrides a HEAD `Content-Length: 0`, and `text/html` responses fail with `ErrWebPage`. YouTube watch pages used to "complete" as empty files.
@@ -137,12 +137,12 @@ Each item names where it plugs in. Follow the existing pattern: domain types fir
 
 1. **Single-instance lock: done (2026-11-09)**, by port step 1 (`internal/ipc`, see §9). We use our own lock rather than Wails' `SingleInstanceLock`, because it must be taken before the DB is opened and its channel also carries commands.
 2. **Maximum simultaneous downloads and a queue runner.** Add `internal/application/queue` (or extend `Service`). It holds QUEUED downloads and calls `Manager.Start` while `active < limit` (a setting, default 3), and listens to `DownloadChanged` events to start the next one.
-   - Use the existing `queues` table and the `downloads.queue_id` column (migration v2).
+   - Use the `queues` list and `Download.QueueID`, both kept in `downloads.json`.
    - Keep the engine unaware of queues.
    - Test: 5 adds with limit 2 never exceed 2 active, and all 5 complete.
-3. **Remember per-host connection limits across restarts: done (2026-11-09)**, by port step 2a (`engine/hosts.go`, the `host_limits` table). The original plan follows for reference. When adaptive concurrency drops connections, record the stable count for the host in a new table, `host_limits(host, max_connections, updated_at)` (migration v3). Start future downloads from that host with it.
+3. **Remember per-host connection limits across restarts: done (2026-11-09)**, by port step 2a (`engine/hosts.go`, saved in `downloads.json`). The original plan follows for reference. When adaptive concurrency drops connections, record the stable count for the host in a new table, `host_limits(host, max_connections, updated_at)` (migration v3). Start future downloads from that host with it.
    - Hook: the `errYielded` branch in `transferSegmented` (`engine/worker.go`).
-   - Expose it to the engine through a small port, so the engine doesn't import SQLite.
+   - Expose it to the engine through a small port, so the engine doesn't import the store.
 4. **Dynamic segment splitting: done** (see above). Possible follow-up: drop a connection that is far slower than the others and re-split its remainder.
 5. **Bandwidth limiting: engine done** (`Manager.SetSpeedLimit`). Still to do: a Settings or toolbar control, persisting the limit, and per-download limits.
 6. **Scheduler.** Start or stop a queue at set times. Live this in the queue runner; persist schedules in `queues` or a new `schedules` table.
@@ -182,7 +182,7 @@ Each item names where it plugs in. Follow the existing pattern: domain types fir
 
 ## 6. Testing approach
 
-- **Unit tests** sit beside the code. **Integration tests** (`tests/integration`) run service, engine and SQLite against `fileServer`, which can:
+- **Unit tests** sit beside the code. **Integration tests** (`tests/integration`) run service, engine and the JSON store against `fileServer`, which can:
   - drop HEAD or range support, or answer 200 for ranges;
   - send a bad Content-Range;
   - return any status, with Retry-After;
@@ -234,12 +234,12 @@ is at `C:\Users\Vaisah\Videos\Go\misterdownloadmanager-main`, version 0.5.1, GPL
    ```
 2. Keep Yellow Flash's architecture and its six engine rules (§3). Port behaviour into the
    existing packages instead of recreating their crate layout. The engine stays free of UI,
-   SQLite and OS APIs.
+   storage and OS APIs.
 3. **Rust dependencies have Go counterparts:**
    - `reqwest` → `net/http` with our `network` client
    - `tokio` tasks → goroutines and `context`
    - `librqbit` (torrents) → `github.com/anacrolix/torrent` (MPL-2.0, compatible with GPL-3.0)
-   - `craft-*` atomic saves → our SQLite transactions
+   - `craft-*` atomic saves → `jsonstore` (temp file, fsync, rename)
 
    Record each new dependency's licence in `NOTICE.md`.
 4. Port their tests along with the code (they have many: planner simulations, lab-server
@@ -309,7 +309,7 @@ After `Shutdown` starts, commands are answered `gone`. MDM saved pending URLs to
 - These replace `Manager.hostLimits`. The cap is the **most** connections seen receiving data when a refusal came. The old code kept the minimum, which can learn 1 for a host that allows 2.
 - A cap applies after 2 refusals and is forgotten 10 minutes after it was last seen (`Config.HostLimitDecay`).
 - "Receiving" is the new `tracker.receiving` counter: it counts connections that got their first byte, not ones still connecting.
-- Learned caps are saved through `domain.HostLimitStore` (`Config.HostLimits`). The SQLite store implements it with the `host_limits` table (migration v3), and `app.go` passes the store.
+- Learned caps are saved through `domain.HostLimitStore` (`Config.HostLimits`). The JSON store keeps them in `downloads.json` (`hostLimits`), and `app.go` passes the store.
 - Verified: `TestLearnedHostLimitSurvivesRestart` learns 2 from a 2-connection server, and after a restart the next download gets **0** refusals.
 
 **Speed limits** (`engine/limiter.go`, from `limiter.rs`)
