@@ -337,12 +337,45 @@ After `Shutdown` starts, commands are answered `gone`. MDM saved pending URLs to
 
 **Verified:** all tests pass on Windows and under `-race` on Linux. Ported tests are in `engine/ported_test.go`, `filesystem/naming_test.go`, `domain/download/checksum_test.go`, `network/network_test.go`, `platform/disk_windows_test.go` and `tests/integration/ported_test.go`.
 
-**Next (2b), in order:**
-1. `sites/gdrive.rs` → `network` (Google Drive confirm pages; extends `UnwrapLink`).
-2. `dns.rs` → `network` (DoH/DoT resolver for the dial guard).
-3. `pac.rs` → `network`. Needs a JavaScript engine: `github.com/dop251/goja` (MIT) is the likely pick; record it in NOTICE.md.
-4. `ftp.rs` → a new FTP transport (`github.com/jlaffaye/ftp`, MIT).
-5. Queues and scheduler from `crates/app` and `docs/queues-and-scheduler.md`, which also cover Phase 3 items 2 and 6.
+### Step 2b notes (storage, Drive, DNS, PAC, FTP, queues): done 2026-11-09
+
+Each part is its own commit; the commit messages give the details.
+
+**Storage** (`persistence/jsonstore`, from MDM's `store.rs`)
+- SQLite is gone. The download list, settings, queues and learned host limits live in `downloads.json`.
+- A background saver writes it atomically and coalesces changes.
+- Generations `.bak`, `.1.bak` and `.2.bak` are kept. A damaged list is set aside as `.corrupt-<time>.bak`, and a list that can't be read is never overwritten.
+- `resume/<id>.json` holds each download's ranges, fsynced before progress is recorded (rule 2).
+- An old `downloads.db` is not imported.
+
+**Google Drive** (`network/sites`, `network/siteflow.go`)
+- Viewer and Docs links are rewritten to the file or export address. Drive's own pages are read: the virus-scan form, confirm links, and the address in the page data.
+- Refusals are given in Google's words, and folders are refused at `Create`.
+- Drive's hosts get a browser User-Agent. Cookies follow redirects between Drive's three hosts only.
+
+**DNS** (`network/dns.go`, `network/dial.go`)
+- The system's DNS, plain DNS over TCP, DoT or DoH, with presets, through Go's resolver with a custom `Dial`.
+- Every client now races a host's addresses (RFC 8305) and remembers the winner.
+- Selected by `engine.Config.DNS`. Not yet in the settings or the UI.
+
+**PAC** (`network/pac.go`)
+- Runs in goja, pinned to a 2026-10-25 commit, with a time limit, a heap watchdog, a stack limit and no binary buffers.
+- Answers are cached per URL; MDM cached per host, which was wrong for scripts that decide by path.
+- Selected by `network.Options.PACScript`. Not yet in the engine config or settings; a fixed proxy URL is still to do.
+
+**FTP** (`network/ftp.go`, test server in `network/ftptest`)
+- An `http.RoundTripper`, so the engine downloads FTP like HTTP: parts, resume through MDTM/`If-Range`, and 421 shedding connections.
+- Our own small client, with CR/LF injection refused.
+- An address's password moves into the SecretStore at `Create`.
+- Passive mode only; active mode (PORT/EPRT) isn't ported. Servers that require TLS session reuse on data connections (vsftpd's `require_ssl_reuse`) may refuse Go's TLS 1.3 resumption.
+
+**Queues and scheduler** (`domain/queue`, `application/queues`): this covers Phase 3 items 2 and 6.
+- Ports `queue.rs`'s rules, adds a runner over a Get/Start/Pause port, and keeps the built-in Main and Synchronization queues.
+- Schedules: start and stop times, days or a single date, retries, open or exit when done.
+- `/s` and `/a` use the queues.
+- Not done: the download-limits data cap, waking the computer, turning it off when done (reported as not supported), and all of the UI.
+
+**Also fixed:** `TestWorkerFailureAndRetry` depended on a part starting exactly at 256 KiB and flaked under `-race`. It now fails whichever part comes after the first.
 
 Not ported: `crates/app` (their egui desktop UI), since Yellow Flash's UI is Wails + React. Port
 its *behaviour* (queues, scheduler, settings) into Go services and the React UI as each feature
