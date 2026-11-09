@@ -145,6 +145,7 @@ func (a *App) Startup(ctx context.Context) {
 	a.stopQueues = cancel
 	runner.Startup(qctx)
 	go runner.Run(qctx)
+	go a.powerLoop(qctx)
 
 	// Download limits (a data cap) and the global speed limit.
 	cap := datacap.New(a.manager, nil)
@@ -169,7 +170,9 @@ func (a *App) queueDone(ctx context.Context, q queue.Queue) {
 		}
 	}
 	if s.TurnOff != "" {
-		a.notice(ctx, "info", "Turning the computer off when a queue is done is not supported yet")
+		// Turning off ends the app too: no separate exit.
+		a.startTurnOff(ctx, string(s.TurnOff), s.ForceClose)
+		return
 	}
 	if s.ExitWhenDone {
 		runtime.Quit(ctx)

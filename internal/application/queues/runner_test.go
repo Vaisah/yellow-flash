@@ -217,6 +217,30 @@ func TestTheSchedulerStartsAndStopsByTheClock(t *testing.T) {
 	}
 }
 
+func TestTheNextWakeIsTheEarliestScheduledStart(t *testing.T) {
+	r, _, _, clock := setup(t) // Monday 22:59:58
+	if _, ok := r.NextWake(*clock); ok {
+		t.Fatal("no queue asks to wake the computer")
+	}
+	s := queue.DefaultSchedule()
+	s.Wake, s.StartAt = true, &queue.TimeOfDay{Hour: 7, Minute: 30}
+	s.Days[time.Tuesday] = false
+	_ = r.SetSchedule(ctx, queue.MainID, s)
+	at, ok := r.NextWake(*clock)
+	if !ok || at.Weekday() != time.Wednesday || at.Hour() != 7 || at.Minute() != 30 {
+		t.Fatalf("next wake %v %v (Tuesday unchecked)", at, ok)
+	}
+	later := queue.DefaultSchedule()
+	later.Wake, later.StartAt = true, &queue.TimeOfDay{Hour: 23}
+	_ = r.SetSchedule(ctx, queue.SyncID, later)
+	if at, _ = r.NextWake(*clock); at.Day() != clock.Day() || at.Hour() != 23 {
+		t.Fatalf("tonight's 23:00 comes first: %v", at)
+	}
+	if r.AnyRunning() {
+		t.Fatal("nothing runs")
+	}
+}
+
 func TestQueuesHoldEachDownloadOnceAndKeepTheirOwnRules(t *testing.T) {
 	r, eng, _, _ := setup(t, "a", "b", "c")
 	if err := r.Delete(ctx, queue.MainID); !errors.Is(err, ErrBuiltin) {

@@ -367,13 +367,13 @@ Each part is its own commit; the commit messages give the details.
 - An `http.RoundTripper`, so the engine downloads FTP like HTTP: parts, resume through MDTM/`If-Range`, and 421 shedding connections.
 - Our own small client, with CR/LF injection refused.
 - An address's password moves into the SecretStore at `Create`.
-- Passive mode only; active mode (PORT/EPRT) isn't ported. Servers that require TLS session reuse on data connections (vsftpd's `require_ssl_reuse`) may refuse Go's TLS 1.3 resumption.
+- Passive by default; active mode (PORT/EPRT) is a network setting. Servers that require TLS session reuse on data connections (vsftpd's `require_ssl_reuse`) may refuse Go's TLS 1.3 resumption.
 
 **Queues and scheduler** (`domain/queue`, `application/queues`): this covers Phase 3 items 2 and 6.
 - Ports `queue.rs`'s rules, adds a runner over a Get/Start/Pause port, and keeps the built-in Main and Synchronization queues.
 - Schedules: start and stop times, days or a single date, retries, open or exit when done.
 - `/s` and `/a` use the queues.
-- Not done: the download-limits data cap, waking the computer, turning it off when done (reported as not supported), and all of the UI.
+- Since 950188c and the power commit: download limits (`application/datacap`), turning off when done (30 s countdown; `CancelTurnOff`/`TurnOffNow`), keeping the computer awake while a queue runs, and waking it for a scheduled start (Windows waitable timer; Linux RTC wake alarm, which needs the `wakealarm` group set up by an administrator). App methods exist for the UI; the UI itself is not built yet.
 
 **Also fixed:** `TestWorkerFailureAndRetry` depended on a part starting exactly at 256 KiB and flaked under `-race`. It now fails whichever part comes after the first.
 

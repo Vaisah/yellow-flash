@@ -306,6 +306,44 @@ func (r *Runner) Run(ctx context.Context) {
 	}
 }
 
+// NextWake returns the earliest start time after now among the queues
+// that should wake the computer for it ("Wake the computer to run this
+// queue"), looking a week ahead.
+func (r *Runner) NextWake(now time.Time) (time.Time, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var best time.Time
+	for _, q := range r.queues {
+		s := q.Schedule
+		if !s.Wake || s.StartAt == nil {
+			continue
+		}
+		for d := 0; d <= 7; d++ {
+			day := now.AddDate(0, 0, d)
+			at := time.Date(day.Year(), day.Month(), day.Day(), s.StartAt.Hour, s.StartAt.Minute, s.StartAt.Second, 0, now.Location())
+			if at.After(now) && s.StartsOn(queue.DateOf(at), at.Weekday()) {
+				if best.IsZero() || at.Before(best) {
+					best = at
+				}
+				break
+			}
+		}
+	}
+	return best, !best.IsZero()
+}
+
+// AnyRunning reports whether a queue is running.
+func (r *Runner) AnyRunning() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, q := range r.queues {
+		if q.Running {
+			return true
+		}
+	}
+	return false
+}
+
 func secondsOfDay(t time.Time) int { h, m, s := t.Clock(); return h*3600 + m*60 + s }
 
 // Tick does one round: the schedules' starts and stops, then each queue's
