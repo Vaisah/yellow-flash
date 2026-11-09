@@ -24,7 +24,10 @@ func TestValidateURL(t *testing.T) {
 	for raw, ok := range map[string]bool{
 		"https://example.com/file.zip":   true,
 		"HTTP://example.com:8080/a?b=c":  true,
-		"ftp://example.com/file":         false,
+		"ftp://example.com/file":         true,
+		"ftpes://me@example.com/file":    true,
+		"ftps://me:pw@example.com/file":  false, // a password never stays in an address
+		"gopher://example.com/x":         false,
 		"file:///etc/passwd":             false,
 		"https://user:pass@example.com/": false,
 		"/relative/path":                 false,

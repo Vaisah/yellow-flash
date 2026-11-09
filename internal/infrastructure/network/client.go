@@ -3,6 +3,7 @@
 package network
 
 import (
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"net"
@@ -44,6 +45,8 @@ type Options struct {
 	// FindProxyForURL picks each request's proxy. Empty: the environment's
 	// proxy settings. Proxies apply only with AllowPrivate (see NewClient).
 	PACScript string
+	// RootCAs verifies FTPS servers; nil uses the system's.
+	RootCAs *x509.CertPool
 }
 
 func (o Options) withDefaults() Options {
@@ -113,6 +116,12 @@ func NewClient(opts Options) *http.Client {
 		ExpectContinueTimeout: time.Second,
 		DisableCompression:    true,
 	}
+	// FTP, FTPS and FTPES through the same dialer: the chosen DNS, the
+	// address race and the dial policy apply to them too.
+	ftp := newFTPTransport(hosts.DialContext, opts.RootCAs)
+	for _, scheme := range []string{"ftp", "ftps", "ftpes"} {
+		transport.RegisterProtocol(scheme, ftp)
+	}
 	maxRedirects := opts.MaxRedirects
 	return &http.Client{
 		Transport: transport,
@@ -122,6 +131,9 @@ func NewClient(opts Options) *http.Client {
 			}
 			if _, err := ValidateURL(req.URL.String()); err != nil {
 				return fmt.Errorf("redirect rejected: %w", err)
+			}
+			if IsFTP(req.URL) {
+				return fmt.Errorf("redirect rejected: %w: a web server may not send a download to FTP", ErrUnsafeURL)
 			}
 			keepCredentialsWithinParty(req, via)
 			return nil
@@ -141,12 +153,15 @@ func ValidateURL(raw string) (*url.URL, error) {
 		return nil, fmt.Errorf("%w: %v", ErrUnsafeURL, err)
 	}
 	scheme := strings.ToLower(u.Scheme)
+	_, hasPassword := u.User.Password()
 	switch {
-	case scheme != "http" && scheme != "https":
-		return nil, fmt.Errorf("%w: scheme %q is not http or https", ErrUnsafeURL, u.Scheme)
+	case scheme != "http" && scheme != "https" && !IsFTP(u):
+		return nil, fmt.Errorf("%w: scheme %q is not http, https or ftp", ErrUnsafeURL, u.Scheme)
 	case u.Opaque != "" || u.Hostname() == "":
 		return nil, fmt.Errorf("%w: missing host", ErrUnsafeURL)
-	case u.User != nil:
+	// An FTP address may name its user; a password never stays in an
+	// address (Create moves it to a secret header).
+	case u.User != nil && (!IsFTP(u) || hasPassword):
 		return nil, fmt.Errorf("%w: embedded credentials are not allowed", ErrUnsafeURL)
 	}
 	return u, nil

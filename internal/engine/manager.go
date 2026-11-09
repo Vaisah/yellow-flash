@@ -11,6 +11,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"net/textproto"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -242,7 +243,21 @@ func (m *Manager) Create(ctx context.Context, req domain.CreateRequest) (*domain
 	if stopping {
 		return nil, domain.ErrShuttingDown
 	}
-	u, err := network.ValidateURL(network.UnwrapLink(req.URL))
+	rawURL := network.UnwrapLink(req.URL)
+	// An FTP login in the address: the password goes to the secret store
+	// (as an Authorization header), never into the saved address.
+	if pu, perr := url.Parse(strings.TrimSpace(rawURL)); perr == nil && network.IsFTP(pu) {
+		if stripped, login := network.FTPLoginHeader(pu); login != "" {
+			rawURL = stripped.String()
+			headers := make(map[string]string, len(req.Headers)+1)
+			for k, v := range req.Headers {
+				headers[k] = v
+			}
+			headers["Authorization"] = login
+			req.Headers = headers
+		}
+	}
+	u, err := network.ValidateURL(rawURL)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", domain.ErrInvalidRequest, err)
 	}

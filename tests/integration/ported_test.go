@@ -3,15 +3,19 @@ package integration
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	domain "github.com/vaisah/internal/domain/download"
 	"github.com/vaisah/internal/engine"
+	"github.com/vaisah/internal/infrastructure/network/ftptest"
+	"github.com/vaisah/internal/infrastructure/persistence/jsonstore"
 )
 
 // A download's own speed limit (ported from MDM's limiter.rs) holds the
@@ -76,6 +80,39 @@ func TestUserChecksum(t *testing.T) {
 	if !errors.Is(err, domain.ErrInvalidRequest) {
 		t.Fatalf("an unusable checksum must be refused: %v", err)
 	}
+}
+
+// FTP (ported from MDM's ftp.rs) is downloaded like HTTP: in parts with
+// REST, its login's password kept out of the saved address and list.
+func TestSegmentedFTPDownloadWithALogin(t *testing.T) {
+	data := payload(2<<20, 44)
+	srv := ftptest.New(t, map[string][]byte{"pub/big.bin": data}, func(s *ftptest.Server) {
+		s.User, s.Pass = "bob", "s3cret!"
+		s.Chunk, s.Delay = 32<<10, time.Millisecond
+	})
+	e := newEnv(t, nil)
+	d, err := e.svc.Add(context.Background(), domain.CreateRequest{
+		URL: "ftp://bob:s3cret%21@" + srv.Addr + "/pub/big.bin", Directory: e.dir, Connections: 4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := e.waitCompleted(d.ID)
+	e.assertFile(done, data)
+	if done.Filename != "big.bin" || strings.Contains(done.URL, "s3cret") || !strings.HasPrefix(done.URL, "ftp://bob@") {
+		t.Fatalf("saved %q as %q", done.URL, done.Filename)
+	}
+	if srv.Rests.Load() == 0 {
+		t.Fatal("not fetched in parts")
+	}
+	if err = e.store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	list, _ := os.ReadFile(e.dbPath)
+	if strings.Contains(string(list), "s3cret") || strings.Contains(string(list), base64.StdEncoding.EncodeToString([]byte("bob:s3cret!"))) {
+		t.Fatal("the FTP password reached downloads.json")
+	}
+	e.store, _ = jsonstore.Open(e.dbPath) // for the env's cleanup
 }
 
 // A per-server connection limit learned from refusals (ported from MDM's
