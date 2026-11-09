@@ -588,8 +588,21 @@ func (r *Settings) All(context.Context) (map[string]string, error) {
 type Queues struct{ s *Store }
 
 // Create adds a queue.
-func (r *Queues) Create(_ context.Context, q *queue.Queue) error {
-	return r.s.mutate(func() { r.s.queues = append(r.s.queues, *q) })
+func (r *Queues) Create(ctx context.Context, q *queue.Queue) error { return r.Save(ctx, *q) }
+
+// Save adds or replaces the queue with q's ID.
+func (r *Queues) Save(_ context.Context, q queue.Queue) error {
+	q = q.Clone()
+	q.Running = false
+	return r.s.mutate(func() {
+		for i := range r.s.queues {
+			if r.s.queues[i].ID == q.ID {
+				r.s.queues[i] = q
+				return
+			}
+		}
+		r.s.queues = append(r.s.queues, q)
+	})
 }
 
 // List returns queues in creation order.

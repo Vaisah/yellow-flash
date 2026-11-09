@@ -14,7 +14,9 @@ import (
 
 	"github.com/vaisah/internal/application/download"
 	"github.com/vaisah/internal/application/events"
+	"github.com/vaisah/internal/application/queues"
 	domain "github.com/vaisah/internal/domain/download"
+	"github.com/vaisah/internal/domain/queue"
 	"github.com/vaisah/internal/engine"
 	"github.com/vaisah/internal/infrastructure/network"
 	"github.com/vaisah/internal/infrastructure/persistence/jsonstore"
@@ -40,6 +42,10 @@ type App struct {
 	store   *jsonstore.Store
 	manager *engine.Manager
 	dataDir string
+	// queues runs the download queues and their schedules (set once the
+	// engine is up; read by the engine's event publisher).
+	queues     atomic.Pointer[queues.Runner]
+	stopQueues context.CancelFunc
 
 	// Commands from the IPC channel wait here until the UI is ready.
 	commands chan ipc.Incoming
@@ -104,6 +110,8 @@ func (a *App) Startup(ctx context.Context) {
 		runtime.EventsEmit(ctx, "downloads:updated", e.Download)
 		if e.Type == events.ProgressUpdated {
 			runtime.EventsEmit(ctx, "downloads:progress", e.Progress)
+		} else if r := a.queues.Load(); r != nil {
+			r.Notify() // a download changed: its queue may start the next one
 		}
 	})
 	// URLs typed by the user may legitimately point at LAN hosts (NAS,
@@ -118,11 +126,42 @@ func (a *App) Startup(ctx context.Context) {
 	if err := a.service.Recover(ctx); err != nil {
 		runtime.LogErrorf(ctx, "recover downloads: %v", err)
 	}
+	runner, err := queues.New(ctx, a.manager, a.store.Queues(), nil)
+	if err != nil {
+		runtime.LogErrorf(ctx, "load queues: %v", err)
+		return
+	}
+	runner.OnDone = func(q queue.Queue) { a.queueDone(ctx, q) }
+	a.queues.Store(runner)
+	qctx, cancel := context.WithCancel(ctx)
+	a.stopQueues = cancel
+	runner.Startup(qctx)
+	go runner.Run(qctx)
+}
+
+// queueDone does what a finished queue's schedule asks.
+func (a *App) queueDone(ctx context.Context, q queue.Queue) {
+	runtime.EventsEmit(ctx, "queues:done", q)
+	s := q.Schedule
+	if s.OpenWhenDone != "" {
+		if err := platform.OpenPath(s.OpenWhenDone); err != nil {
+			a.notice(ctx, "error", "Could not open "+s.OpenWhenDone+": "+err.Error())
+		}
+	}
+	if s.TurnOff != "" {
+		a.notice(ctx, "info", "Turning the computer off when a queue is done is not supported yet")
+	}
+	if s.ExitWhenDone {
+		runtime.Quit(ctx)
+	}
 }
 
 // Shutdown pauses active downloads, persisting progress, then closes the DB.
 func (a *App) Shutdown(ctx context.Context) {
 	a.stopCommands()
+	if a.stopQueues != nil {
+		a.stopQueues()
+	}
 	canClose := true
 	if a.service != nil {
 		waitCtx, cancel := context.WithTimeout(ctx, 20*time.Second)

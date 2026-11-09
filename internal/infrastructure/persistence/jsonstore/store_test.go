@@ -118,7 +118,7 @@ func TestSettingsQueuesAndHostLimitsPersist(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "downloads.json")
 	s := open(t, path)
 	_ = s.Settings().Set(ctx, "ui.connections", "8")
-	_ = s.Queues().Create(ctx, &queue.Queue{ID: "q1", Name: "Main", MaxConcurrent: 3, CreatedAt: time.Now()})
+	_ = s.Queues().Create(ctx, &queue.Queue{ID: "q1", Name: "Main", FilesAtOnce: 3, CreatedAt: time.Now()})
 	d := download("a", time.Now())
 	d.QueueID = "q1"
 	_ = s.Save(ctx, d)
@@ -130,7 +130,7 @@ func TestSettingsQueuesAndHostLimitsPersist(t *testing.T) {
 	if v, ok, _ := s.Settings().Get(ctx, "ui.connections"); !ok || v != "8" {
 		t.Fatalf("setting %q %v", v, ok)
 	}
-	if qs, _ := s.Queues().List(ctx); len(qs) != 1 || qs[0].MaxConcurrent != 3 {
+	if qs, _ := s.Queues().List(ctx); len(qs) != 1 || qs[0].FilesAtOnce != 3 {
 		t.Fatalf("queues %+v", qs)
 	}
 	if ls, _ := s.LoadHostLimits(ctx); len(ls) != 1 || ls[0].MaxConnections != 2 {

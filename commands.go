@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	domain "github.com/vaisah/internal/domain/download"
+	"github.com/vaisah/internal/domain/queue"
 	"github.com/vaisah/internal/infrastructure/network"
 	"github.com/vaisah/internal/ipc"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -87,9 +88,10 @@ func (a *App) dispatch(ctx context.Context, in ipc.Incoming) {
 		return
 	}
 	if cmd.StartQueue {
-		// No queues yet: the main queue is every waiting download.
-		if err := a.service.ResumeAll(ctx); err != nil {
-			a.notice(ctx, "error", "Could not start the queue: "+err.Error())
+		if r := a.queues.Load(); r != nil {
+			if err := r.Start(ctx, a.queueID(cmd.Queue)); err != nil {
+				a.notice(ctx, "error", "Could not start the queue: "+err.Error())
+			}
 		}
 	}
 	url := strings.TrimSpace(cmd.URL)
@@ -132,14 +134,30 @@ func (a *App) addSilently(ctx context.Context, url string, cmd ipc.Command) {
 	} else {
 		d, err = a.service.Add(ctx, req)
 	}
+	// /a: the download waits in the main queue (or the one named).
+	if err == nil && cmd.Later {
+		if r := a.queues.Load(); r != nil {
+			err = r.Add(ctx, a.queueID(cmd.Queue), d.ID)
+		}
+	}
 	switch {
 	case err != nil:
 		a.notice(ctx, "error", "Could not add "+url+": "+err.Error())
 	case cmd.Later:
-		a.notice(ctx, "ok", "Added "+d.Filename+" (not started)")
+		a.notice(ctx, "ok", "Added "+d.Filename+" to the queue (not started)")
 	default:
 		a.notice(ctx, "ok", "Downloading "+d.Filename)
 	}
+}
+
+// queueID is the queue a command names, else the main queue.
+func (a *App) queueID(name string) string {
+	if r := a.queues.Load(); r != nil && name != "" {
+		if id, ok := r.FindByName(name); ok {
+			return id
+		}
+	}
+	return queue.MainID
 }
 
 // requestHeaders carries the browser's request context. Credentials among
