@@ -372,7 +372,9 @@ func TestWorkerFailureAndRetry(t *testing.T) {
 	var failures atomic.Int32
 	fs := newFileServer(t, data, func(fs *fileServer) {
 		fs.fail = func(r *http.Request, _ int64) (int, string) {
-			if rangeStart(r) == 256<<10 && failures.Add(1) <= 2 {
+			// Any part after the first: where the planner splits depends on
+			// timing, so no fixed offset is sure to be asked for.
+			if rangeStart(r) > 0 && failures.Add(1) <= 2 {
 				return http.StatusInternalServerError, ""
 			}
 			return 0, ""

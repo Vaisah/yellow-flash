@@ -40,6 +40,10 @@ type Options struct {
 	AllowPrivate bool
 	// DNS is the resolver names are looked up with; nil is the system's.
 	DNS *DNSChoice
+	// PACScript is a proxy auto-config script's text: its
+	// FindProxyForURL picks each request's proxy. Empty: the environment's
+	// proxy settings. Proxies apply only with AllowPrivate (see NewClient).
+	PACScript string
 }
 
 func (o Options) withDefaults() Options {
@@ -77,6 +81,9 @@ func NewClient(opts Options) *http.Client {
 	opts = opts.withDefaults()
 	dialer := &net.Dialer{Timeout: opts.DialTimeout, KeepAlive: 30 * time.Second}
 	proxy := http.ProxyFromEnvironment
+	if opts.PACScript != "" {
+		proxy = pacProxy(opts.PACScript)
+	}
 	if !opts.AllowPrivate {
 		dialer.Control = func(_, address string, _ syscall.RawConn) error {
 			return checkDialAddress(address)
