@@ -154,7 +154,7 @@ func TestTheVideoButtonAsksTheRules(t *testing.T) {
 	if err != "" {
 		t.Fatal(err)
 	}
-	want := ipc.Command{VideoPage: "https://cdn.test/v/master.m3u8?t=1", Referer: "https://www.quiet.test/watch",
+	want := ipc.Command{Browser: true, VideoPage: "https://cdn.test/v/master.m3u8?t=1", Referer: "https://www.quiet.test/watch",
 		Cookies: "cdn=1", CookieJar: jar, UserAgent: chromeUA}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Errorf("got %+v\nwant %+v", cmd, want)
@@ -191,7 +191,7 @@ func TestTheButtonsAndMenusReachTheApp(t *testing.T) {
 		{Show: "options:panels"},
 		{},
 		{ExcludeSite: "x.test"},
-		{Links: []string{"https://x.test/a.zip"}, Referer: "https://x.test/"},
+		{Browser: true, Links: []string{"https://x.test/a.zip"}, Referer: "https://x.test/"},
 	}
 	if !reflect.DeepEqual(*sent, want) {
 		t.Errorf("got %+v\nwant %+v", *sent, want)
@@ -428,7 +428,7 @@ func TestCookiesKeepTheirDomains(t *testing.T) {
 
 func TestMessageToCommand(t *testing.T) {
 	c := toCommand(parse(t, `{"url":"https://x/a.zip","referrer":"https://x/","cookies":"a=1","userAgent":"UA","filename":""}`))
-	want := ipc.Command{URL: "https://x/a.zip", Referer: "https://x/", Cookies: "a=1", UserAgent: "UA"}
+	want := ipc.Command{Browser: true, URL: "https://x/a.zip", Referer: "https://x/", Cookies: "a=1", UserAgent: "UA"}
 	if !reflect.DeepEqual(c, want) {
 		t.Errorf("got %+v", c)
 	}

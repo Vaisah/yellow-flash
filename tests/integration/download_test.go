@@ -709,6 +709,36 @@ func TestPrivateAddressesBlockedByDefault(t *testing.T) {
 	}
 }
 
+// As the app runs (private addresses allowed for what the user types), an
+// address from a web page still may not reach this computer or its
+// network, and stays restricted after a restart.
+func TestBrowserAddressesMayNotReachPrivateAddresses(t *testing.T) {
+	data := payload(10<<10, 26)
+	fs := newFileServer(t, data, nil)
+	e := newEnv(t, func(c *engine.Config) { c.Client, c.AllowPrivateNetworks = nil, true })
+	e.assertFile(e.waitCompleted(e.add(fs.url("/files/typed.bin"), "typed.bin", 1)), data)
+	before := fs.requests.Load()
+	d, err := e.svc.Add(context.Background(), domain.CreateRequest{URL: fs.url("/files/page.bin"), Directory: e.dir,
+		Filename: "page.bin", Connections: 1, Restricted: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := e.waitFailed(d.ID)
+	if !strings.Contains(failed.Error, "not allowed") || fs.requests.Load() != before {
+		t.Fatalf("error=%q requests=%d", failed.Error, fs.requests.Load()-before)
+	}
+	e.restart()
+	if !e.persisted(d.ID).Restricted {
+		t.Fatal("not restricted after a restart")
+	}
+	if err := e.svc.Start(context.Background(), d.ID); err != nil {
+		t.Fatal(err)
+	}
+	if again := e.waitFailed(d.ID); !strings.Contains(again.Error, "not allowed") || fs.requests.Load() != before {
+		t.Fatalf("resumed: error=%q requests=%d", again.Error, fs.requests.Load()-before)
+	}
+}
+
 func TestCreateRejectsUnsafeInput(t *testing.T) {
 	e := newEnv(t, nil)
 	for _, req := range []domain.CreateRequest{

@@ -3,6 +3,7 @@
 package network
 
 import (
+	"context"
 	"crypto/x509"
 	"errors"
 	"fmt"
@@ -43,7 +44,8 @@ type Options struct {
 	DNS *DNSChoice
 	// PACScript is a proxy auto-config script's text: its
 	// FindProxyForURL picks each request's proxy. Empty: the environment's
-	// proxy settings. Proxies apply only with AllowPrivate (see NewClient).
+	// proxy settings. Without AllowPrivate a proxy still applies, and each
+	// target is checked before it is handed to the proxy (guardedProxy).
 	PACScript string
 	// RootCAs verifies FTPS servers; nil uses the system's.
 	RootCAs *x509.CertPool
@@ -114,13 +116,20 @@ func NewClient(opts Options) *http.Client {
 			proxy = http.ProxyURL(u)
 		}
 	}
+	// Untrusted addresses through a proxy: the proxy is the user's own
+	// setting (often on this computer), so connecting to it is allowed; the
+	// target is checked before the request is handed to it (guardedProxy).
+	var guarded func(*http.Request) (*url.URL, error)
 	if !opts.AllowPrivate {
-		dialer.Control = func(_, address string, _ syscall.RawConn) error {
+		dialer.ControlContext = func(ctx context.Context, _, address string, _ syscall.RawConn) error {
+			if _, viaProxy := ctx.Value(proxiedKey{}).(*url.URL); viaProxy {
+				return nil
+			}
 			return checkDialAddress(address)
 		}
-		// A proxy would make the dialed address the proxy's, defeating the
-		// policy. Proxy support for untrusted URLs arrives with Phase 5.
-		proxy = nil
+		if proxy != nil {
+			guarded, proxy = proxy, proxyChosen
+		}
 	}
 	protocols := new(http.Protocols)
 	protocols.SetHTTP1(true)
@@ -150,9 +159,13 @@ func NewClient(opts Options) *http.Client {
 	for _, scheme := range []string{"ftp", "ftps", "ftpes"} {
 		transport.RegisterProtocol(scheme, ftp)
 	}
+	var rt http.RoundTripper = transport
+	if guarded != nil {
+		rt = &guardedProxy{base: transport, proxy: guarded, dns: resolver}
+	}
 	maxRedirects := opts.MaxRedirects
 	return &http.Client{
-		Transport: transport,
+		Transport: rt,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= maxRedirects {
 				return fmt.Errorf("%w (limit %d)", ErrTooManyRedirects, maxRedirects)
@@ -219,6 +232,80 @@ func IsPublicAddress(ip netip.Addr) bool {
 		}
 	}
 	return ip != netip.AddrFrom4([4]byte{255, 255, 255, 255})
+}
+
+// proxiedKey marks a request's context with the proxy guardedProxy chose
+// for it: the transport sends it there, and connecting to it is allowed.
+type proxiedKey struct{}
+
+// proxyChosen is the transport's proxy when guardedProxy decides: the one
+// it recorded, or none.
+func proxyChosen(req *http.Request) (*url.URL, error) {
+	u, _ := req.Context().Value(proxiedKey{}).(*url.URL)
+	return u, nil
+}
+
+// guardedProxy picks each untrusted request's proxy once and, when there is
+// one, checks the target before handing the request over: the dial policy
+// sees only the proxy's address then. Other schemes (FTP) never use the
+// proxy and stay under the dial policy.
+type guardedProxy struct {
+	base  http.RoundTripper
+	proxy func(*http.Request) (*url.URL, error)
+	dns   *Resolver
+}
+
+func (g *guardedProxy) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
+		return g.base.RoundTrip(req)
+	}
+	p, err := g.proxy(req)
+	if err == nil && p != nil {
+		err = checkProxiedTarget(req.Context(), req.URL.Hostname(), p, g.dns)
+	}
+	if err != nil {
+		if req.Body != nil {
+			_ = req.Body.Close()
+		}
+		return nil, err
+	}
+	if p == nil {
+		return g.base.RoundTrip(req)
+	}
+	return g.base.RoundTrip(req.WithContext(context.WithValue(req.Context(), proxiedKey{}, p)))
+}
+
+// checkProxiedTarget refuses a target that is, or is named as, a loopback,
+// private or link-local address. Names are looked up here too, except
+// through a socks5h proxy, which is chosen so the proxy alone resolves them;
+// a name that doesn't resolve here is left to the proxy.
+func checkProxiedTarget(ctx context.Context, host string, proxy *url.URL, dns *Resolver) error {
+	if host == "" {
+		return fmt.Errorf("%w: no host", ErrBlockedAddress)
+	}
+	if ip, err := netip.ParseAddr(host); err == nil {
+		if !IsPublicAddress(ip) {
+			return fmt.Errorf("%w: %s", ErrBlockedAddress, ip)
+		}
+		return nil
+	}
+	name := strings.ToLower(strings.TrimSuffix(host, "."))
+	if name == "localhost" || strings.HasSuffix(name, ".localhost") {
+		return fmt.Errorf("%w: %s", ErrBlockedAddress, host)
+	}
+	if strings.EqualFold(proxy.Scheme, "socks5h") {
+		return nil
+	}
+	ips, err := dns.LookupIP(ctx, host)
+	if err != nil {
+		return nil
+	}
+	for _, ip := range ips {
+		if !IsPublicAddress(ip) {
+			return fmt.Errorf("%w: %s is %s", ErrBlockedAddress, host, ip)
+		}
+	}
+	return nil
 }
 
 func checkDialAddress(address string) error {

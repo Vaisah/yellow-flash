@@ -254,7 +254,7 @@ func (m *Manager) fetchPartOnce(ctx context.Context, e *entry, f *os.File, pl *p
 		if v := ifRangeValidator(meta.ETag, meta.LastModified); v != "" {
 			req.Header.Set("If-Range", v)
 		}
-		if res, err = m.cfg.Client.Do(req); err != nil {
+		if res, err = m.clientFor(e).Do(req); err != nil {
 			return err
 		}
 		defer res.Body.Close()
@@ -523,7 +523,7 @@ func (m *Manager) fetchStream(ctx context.Context, e *entry, f *os.File, meta *d
 				req.Header.Set("If-Range", v)
 			}
 		}
-		if res, err = m.cfg.Client.Do(req); err != nil {
+		if res, err = m.clientFor(e).Do(req); err != nil {
 			return err
 		}
 		defer res.Body.Close()

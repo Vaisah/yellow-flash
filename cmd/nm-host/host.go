@@ -202,7 +202,7 @@ func (h *host) answer(m Message, rules browser.CaptureRules) Reply {
 		if len(links) == 0 {
 			return failed("refused", "no link Yellow Flash downloads")
 		}
-		cmd = &ipc.Command{Links: links, Referer: m.Referrer, Cookies: m.Cookies,
+		cmd = &ipc.Command{Browser: true, Links: links, Referer: m.Referrer, Cookies: m.Cookies,
 			UserAgent: m.UserAgent, Private: m.Private}
 	case m.Video:
 		c, why, err := videoCommand(&m, rules, name)
@@ -306,7 +306,7 @@ func videoCommand(m *Message, rules browser.CaptureRules, name string) (ipc.Comm
 	if webPage(m.Src) {
 		page, referer = m.Src, m.URL
 	}
-	return ipc.Command{VideoPage: page, Referer: referer, Cookies: m.Cookies,
+	return ipc.Command{Browser: true, VideoPage: page, Referer: referer, Cookies: m.Cookies,
 		CookieJar: m.CookieJar, UserAgent: m.UserAgent, Private: m.Private}, "", ""
 }
 
@@ -335,7 +335,7 @@ const pacMax = 256 * 1024
 
 func toCommand(m Message) ipc.Command {
 	c := ipc.Command{
-		URL: m.URL, Name: baseName(m.Filename), Referer: m.Referrer, Cookies: m.Cookies,
+		Browser: true, URL: m.URL, Name: baseName(m.Filename), Referer: m.Referrer, Cookies: m.Cookies,
 		CookieJar: m.CookieJar, UserAgent: m.UserAgent, Mime: m.Mime, Post: m.Post,
 		Private: m.Private, Proxy: browserProxy(m.Proxy), ProxyLogin: m.ProxyLogin,
 	}

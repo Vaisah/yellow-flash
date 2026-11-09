@@ -174,7 +174,7 @@ func TestRulesHandOffAndTheStatusPerBrowser(t *testing.T) {
 		t.Fatal("nothing reached the app")
 	}
 	want := map[string]any{"token": "t0k3n", "url": "https://x.test/get?id=1", "final_url": "https://cdn.test/f/a.zip",
-		"name": "a.zip", "size": 200000.0, "post": "token=abc", "private": true}
+		"name": "a.zip", "size": 200000.0, "post": "token=abc", "private": true, "browser": true}
 	for k, v := range want {
 		if sent[k] != v {
 			t.Errorf("%s = %v, want %v", k, sent[k], v)

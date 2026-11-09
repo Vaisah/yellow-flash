@@ -78,6 +78,13 @@ type Config struct {
 	// mode. AllowPrivate, MaxConnsPerHost and DNS come from the fields
 	// above.
 	Network network.Options
+	// RestrictedClient and RestrictedProber serve downloads whose address
+	// came from a web page (CreateRequest.Restricted): loopback, private
+	// and link-local destinations are refused whatever AllowPrivateNetworks
+	// says. Default: the default client's settings without them; with an
+	// injected Client (tests), that client and its prober.
+	RestrictedClient network.Doer
+	RestrictedProber Prober
 }
 
 // BytesReceived counts every byte the downloads have received so far.
@@ -112,13 +119,28 @@ func (c Config) withDefaults() Config {
 	if c.HostLimitDecay <= 0 {
 		c.HostLimitDecay = hostLimitDecay
 	}
+	injected, proberGiven := c.Client != nil, c.Prober != nil
 	if c.Client == nil {
 		opts := c.Network
 		opts.AllowPrivate, opts.MaxConnsPerHost, opts.DNS = c.AllowPrivateNetworks, c.MaxConnections*2, c.DNS
 		c.Client = network.NewClient(opts)
 	}
+	if c.RestrictedClient == nil {
+		c.RestrictedClient = c.Client
+		if !injected {
+			opts := c.Network
+			opts.AllowPrivate, opts.MaxConnsPerHost, opts.DNS = false, c.MaxConnections*2, c.DNS
+			c.RestrictedClient = network.NewClient(opts)
+		}
+	}
 	if c.Prober == nil {
 		c.Prober = network.NewProber(c.Client)
+	}
+	if c.RestrictedProber == nil {
+		c.RestrictedProber = c.Prober
+		if !injected && !proberGiven {
+			c.RestrictedProber = network.NewProber(c.RestrictedClient)
+		}
 	}
 	if c.Publisher == nil {
 		c.Publisher = events.Nop{}
@@ -187,6 +209,28 @@ func (m *Manager) SetDownloadSpeedLimit(ctx context.Context, id string, bytesPer
 	}
 	m.mu.Unlock()
 	return m.save(ctx, snap)
+}
+
+// restricted reports a download whose address came from a web page: it
+// gets the restricted client and prober.
+func (m *Manager) restricted(e *entry) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return e.d.Restricted
+}
+
+func (m *Manager) clientFor(e *entry) network.Doer {
+	if m.restricted(e) {
+		return m.cfg.RestrictedClient
+	}
+	return m.cfg.Client
+}
+
+func (m *Manager) proberFor(e *entry) Prober {
+	if m.restricted(e) {
+		return m.cfg.RestrictedProber
+	}
+	return m.cfg.Prober
 }
 
 // HostLimits lists the per-server connection limits learned so far.
@@ -321,7 +365,8 @@ func (m *Manager) Create(ctx context.Context, req domain.CreateRequest) (*domain
 	now := time.Now().UTC()
 	d := &domain.Download{ID: uuid.NewString(), URL: u.String(), FilenameExplicit: explicit, Destination: dir,
 		Size: domain.UnknownSize, Connections: conns, Status: domain.Queued, QueueID: req.QueueID, Headers: public,
-		SpeedLimit: req.SpeedLimit, ExpectedChecksum: checksum.String(), CreatedAt: now, UpdatedAt: now}
+		SpeedLimit: req.SpeedLimit, ExpectedChecksum: checksum.String(), Restricted: req.Restricted,
+		CreatedAt: now, UpdatedAt: now}
 	m.mu.Lock()
 	d.Filename = m.reserveNameLocked(dir, name, d.ID)
 	d.TempPath = filesystem.TempPath(dir, d.Filename)

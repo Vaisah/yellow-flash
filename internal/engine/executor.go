@@ -153,7 +153,7 @@ func (m *Manager) probe(ctx context.Context, e *entry, headers http.Header) (dom
 	var meta domain.RemoteMetadata
 	err := m.withRetry(ctx, e, nil, func() (bool, error) {
 		var err error
-		meta, err = m.cfg.Prober.Probe(ctx, rawURL, headers)
+		meta, err = m.proberFor(e).Probe(ctx, rawURL, headers)
 		return false, err
 	})
 	if err != nil {
@@ -181,7 +181,7 @@ func (m *Manager) open(ctx context.Context, e *entry, headers http.Header) (doma
 	var op *opened
 	err := m.withRetry(ctx, e, nil, func() (bool, error) {
 		octx, cancel := context.WithCancelCause(ctx)
-		md, res, err := m.cfg.Prober.Open(octx, rawURL, headers)
+		md, res, err := m.proberFor(e).Open(octx, rawURL, headers)
 		if err != nil {
 			cancel(nil)
 			return false, err

@@ -35,6 +35,10 @@ type Command struct {
 	// StartQueue (/s) starts the main queue.
 	StartQueue bool `json:"start_queue,omitempty"`
 
+	// Browser: the native host sends this command for a web page (through
+	// the extension). Its addresses are untrusted: they may not reach this
+	// computer or its network.
+	Browser bool `json:"browser,omitempty"`
 	// From the browser: the request context to reuse.
 	Referer string `json:"referer,omitempty"`
 	Cookies string `json:"cookies,omitempty"`

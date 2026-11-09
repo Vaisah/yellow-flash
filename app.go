@@ -117,8 +117,9 @@ func (a *App) Startup(ctx context.Context) {
 		}
 	})
 	// URLs typed by the user may legitimately point at LAN hosts (NAS,
-	// intranet). Browser-originated requests will use a restricted client.
-	// DNS, proxy and FTP mode from the saved network settings.
+	// intranet). Browser-originated downloads use the engine's restricted
+	// client (CreateRequest.Restricted). DNS, proxy and FTP mode from the
+	// saved network settings.
 	dns, netOpts, err := a.engineNetwork(ctx)
 	if err != nil {
 		runtime.LogErrorf(ctx, "network settings: %v", err)
@@ -158,6 +159,7 @@ func (a *App) Startup(ctx context.Context) {
 	a.dataCap.Store(cap)
 	a.applyLiveSettings(a.GetNetworkSettings())
 	go cap.Run(qctx)
+	go a.registerBrowserHost(ctx)
 }
 
 // queueDone does what a finished queue's schedule asks.

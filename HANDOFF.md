@@ -11,11 +11,10 @@ The goal is a cross-platform (Windows and Linux) download manager that competes 
 | 1 | Core Go download engine: segmented, resumable, crash-safe, tested | **Done** |
 | 2 | Desktop app ("Yellow Flash" UI on Wails) | **Done** |
 | 3 | Download management: queues, limits, scheduling, throttling, notifications | Next |
-| 4 | Browser integration: Chrome, Edge and Firefox extensions + native messaging | Planned |
+| 4 | Browser integration: Chrome, Edge and Firefox extensions + native messaging | Backend done (port step 3); settings UI to do |
 | 5 | Advanced: auth, cookies, proxies, checksums, priorities, themes | Planned |
 | 6 | Packaging: installers, OS keychains, notifications, signing | Planned |
 
-> **Uncommitted work.** Only `0db8c1c` (end of Phase 1) is committed. All of Phase 2 and the engine fixes listed in §4 are uncommitted in the working tree. Review `git status` and commit them first. See §7 for what is generated and whether to commit it.
 
 ## 2. Getting started
 
@@ -162,13 +161,13 @@ Each item names where it plugs in. Follow the existing pattern: domain types fir
   4. The app sends an acknowledgement.
   5. Only then does the extension cancel the browser download.
   6. If the app is unavailable or rejects it, the browser download continues.
-- **Security.** Browser-originated downloads must use a client with `network.Options{AllowPrivate: false}`. The engine's default is already restrictive; the desktop app opts in for typed URLs (`app.go`). Pass the request's cookies, referer and user agent as `CreateRequest.Headers`. Credentials go to `SecretStore` automatically (`engine.splitHeaders`). Never trust filenames or sizes from the extension.
+- **Security.** Browser-originated downloads use the engine's restricted client (`CreateRequest.Restricted`, persisted as `Download.Restricted`; port step 3). The desktop app allows private addresses for typed URLs only (`app.go`). Pass the request's cookies, referer and user agent as `CreateRequest.Headers`. Credentials go to `SecretStore` automatically (`engine.splitHeaders`). Never trust filenames or sizes from the extension.
 - **Fallbacks.** `blob:` and `data:` URLs, and POST-only downloads, cannot be refetched, so leave them to the browser.
 - **Video sites.** Capturing media streams (for example from YouTube) is a product, legal and terms-of-service decision; make it before building. The engine already rejects watch pages with a clear message. If you build it, prefer opt-in integration of an extractor such as yt-dlp over writing one.
 
 ### Phase 5: advanced features
 - Custom headers, HTTP auth and cookies: the engine already accepts `CreateRequest.Headers`; add UI fields.
-- Proxy support: add to `network.Options`. Note that the SSRF dial guard is disabled when a proxy is used (`client.go`), so decide on policy first.
+- Proxy support: done (`network.Options.Proxy`/`PACScript`, network settings). Policy for untrusted addresses: the proxy is kept and each target is checked before it is handed over (`guardedProxy` in `client.go`; see "Step 3 notes").
 - Checksum entry: a user-provided SHA-256 or MD5 that `verifyFile` checks.
 - Queue priorities, scheduled downloads, bandwidth schedules.
 - Start with the OS and minimise to the system tray.
@@ -253,7 +252,7 @@ is at `C:\Users\Vaisah\Videos\Go\misterdownloadmanager-main`, version 0.5.1, GPL
 |---|---|---|---|
 | 1 ✅ | `crates/ipc` (`lib.rs`, `api.rs`) | `internal/ipc`, `internal/platform/lock*.go`, `main.go`, `commands.go` | **Done 2026-11-09**; see "Step 1 notes" below. `browsers.rs`, `capture.rs` and `extension.rs` belong to the browser host and move to step 3. |
 | 2 ✅ | `crates/engine` remainder: `hosts.rs`, `limiter.rs`, `naming.rs`, `verify.rs`, `sparse.rs`, `disk.rs` (2a); `sites/gdrive.rs`, `dns.rs`, `pac.rs`, `ftp.rs`, queues and scheduler, plus JSON storage replacing SQLite (2b) | `internal/engine`, `internal/infrastructure/{network,persistence/jsonstore}`, `internal/platform`, `internal/application/queues`, `internal/domain/queue` | **Done 2026-11-09.** See "Step 2a notes" and "Step 2b notes". |
-| 3 | `crates/nmhost` + `extension/` | `cmd/nm-host`, `extension/` | Browser capture (Phase 4). The extension is JavaScript and can be ported nearly as is (GPL-3.0); change its IDs and name to Yellow Flash's own. |
+| 3 ✅ | `crates/nmhost` + `extension/`, `ipc`'s `browsers.rs`, `capture.rs`, `extension.rs` | `cmd/nm-host`, `extension/`, `internal/browser`, `browser_app.go` | **Done 2026-11-09.** See "Step 3 notes". |
 | 4 | `crates/tools` | `internal/tools` | yt-dlp and ffmpeg video, gallery-dl, run as separate programs, plus the adapter relay. |
 | 5 | `crates/torrent` | `internal/torrent` | Magnet links and .torrent files via anacrolix/torrent. |
 | 6 | `crates/remote` | `internal/remote` | Phone or LAN remote control over HTTPS with pairing. |
@@ -296,7 +295,7 @@ After `Shutdown` starts, commands are answered `gone`. MDM saved pending URLs to
 **Not done yet.**
 - Queries and actions (`query`, `action`, `api`, `pair`) all get `{"error":…,"code":"api-off"}`. Implement the automation API in step 7, using the answer types in `ipc/api.go`.
 - MDM's JSON Schema generation (`docs/automation-api.schema.json`) is not ported; add it with step 7.
-- Browser fields (`cookie_jar`, `post`, `proxy`, `video_page`, `links`, …) are parsed but ignored, except Referer, Cookie and User-Agent, which become request headers. Wire them in step 3, together with the `AllowPrivate: false` client for browser-originated downloads (§5, Phase 4).
+- Browser fields: see "Step 3 notes" for which are used, refused or still ignored.
 - Magnet links and `.torrent` files are rejected with a toast until step 5.
 
 **Verified.**
@@ -376,6 +375,42 @@ Each part is its own commit; the commit messages give the details.
 - Since 950188c and the power commit: download limits (`application/datacap`), turning off when done (30 s countdown; `CancelTurnOff`/`TurnOffNow`), keeping the computer awake while a queue runs, and waking it for a scheduled start (Windows waitable timer; Linux RTC wake alarm, which needs the `wakealarm` group set up by an administrator). App methods exist for the UI; the UI itself is not built yet.
 
 **Also fixed:** `TestWorkerFailureAndRetry` depended on a part starting exactly at 256 KiB and flaked under `-race`. It now fails whichever part comes after the first.
+
+### Step 3 notes (browser integration): done 2026-11-09
+
+Four commits (3a–3d); the commit messages give the details.
+
+**Shared rules** (`internal/browser`, from `ipc`'s `capture.rs`, `browsers.rs`, `extension.rs`)
+- The capture rules are saved by the app as JSON under `settings["browser.capture"]` in `downloads.json`. The host reads them (falling back to `.bak`) at every hand-off, so a change applies at once.
+- Our own identity: the manifest key `browser.ManifestKey` gives the unpacked ID `fhlfnlgbgkmofdmohiohgmiojleegaah`. Its private half was not kept: an unpacked extension needs only the public key, and a store signs with its own. Host name `com.yellowflash.host`; Firefox ID `integration@yellowflash`. Store IDs are placeholders and are never served until set.
+
+**Native host** (`cmd/nm-host`)
+- Build it as `yellowflash-nmhost` (`.exe` on Windows) beside the app: `go build -o "build/bin/yellowflash-nmhost.exe" ./cmd/nm-host`. Its replies match MDM's word for word, including the older `(FileType)` wording that the extension still parses.
+- `--register`/`--unregister`. Windows: HKCU (HKLM with `--all-users`) through `x/sys/windows/registry`, with the manifests beside the exe. Linux and macOS: each installed browser's folder, skipping browsers a package's system-wide manifest already covers. `--package-manifests <root>` writes the system-wide ones for Linux packages.
+- The app registers the host at every start when it is beside the app, the copy isn't portable, and integration is on (there is no installer yet; Phase 6).
+- Downloads left to the browser are logged in `<data>/logs/yellowflash.log`, a private window's without its site or name.
+- MDM's Safari path (`--safari`) is not ported.
+
+**Extension** (`extension/`)
+- MDM's extension with Yellow Flash's names, key, IDs, version (kept equal to `ipc.AppVersion`) and icons (from `build/appicon.png`, also embedded in `video.js`). MDM's sponsor link is removed.
+- `node tools/extension/test.mjs` runs its 65 checks without a browser. `cmd/nm-host`'s `TestTheShippedExtensionIsTheOneServed` pins the manifests and `background.js` to the host's IDs, name and version.
+- Not ported: `tools/extension/e2e.mjs` (needs a real browser), `pack.ps1` and `check-pack.mjs` (store packaging), `locales.py`.
+- `docs/browser-help.md` was rewritten for what Yellow Flash does today, keeping the section ids the extension links to.
+
+**App** (`browser_app.go`, `commands.go`)
+- The host sets `ipc.Command.Browser`.
+- A browser download starts at once, without the Add URL dialog, which would lose its cookies and its restriction. It carries Referer, Cookie and User-Agent, and `CreateRequest.Restricted`.
+- Refused on the spot, so the browser keeps the download: private windows (the list can't keep a download out yet), POST forms (the engine has no POST), video pages (step 4), and link lists (they need the picker UI).
+- The toolbar's "never from this site" and the video button's "not on this site" update the saved rules.
+- Bindings for the UI: `GetBrowserSettings`, `SaveBrowserSettings`, `GetBrowserIntegration`, `RegisterBrowserIntegration`, `UnregisterBrowserIntegration`. The UI is not built.
+- Still ignored: `final_url`, `size` and `mime` (never trusted; the engine asks the server), `cookie_jar` (for yt-dlp, step 4), and the browser's own proxy (`proxy`, `proxy_pac`, `proxy_login`). The app's own proxy settings apply.
+
+**Proxy policy for untrusted addresses** (`network/client.go`)
+- The user's proxy is kept: it is their own setting, and connecting to it is allowed even on this computer.
+- Each target is checked before it is handed over. Literal IPs and `localhost` names are always checked. Names are looked up locally too, except through `socks5h`, which is chosen so that only the proxy resolves them. A name that doesn't resolve locally is left to the proxy.
+- Each request's proxy is decided once and recorded in its context, which the transport and the dial guard both read, so a PAC script can't answer differently in between. FTP never uses the proxy and stays under the dial guard.
+
+**Known flaky:** `TestConnectionReset`'s bytes-served bound fails about 1 run in 20 under load on Windows, on 0f24317 as well.
 
 Not ported: `crates/app` (their egui desktop UI), since Yellow Flash's UI is Wails + React. Port
 its *behaviour* (queues, scheduler, settings) into Go services and the React UI as each feature

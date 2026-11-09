@@ -35,12 +35,16 @@ type Download struct {
 	SpeedLimit int64 `json:"speedLimit"`
 	// ExpectedChecksum is a hash the user gave ("sha256:<hex>"); it takes
 	// precedence over one the server announces.
-	ExpectedChecksum string            `json:"expectedChecksum,omitempty"`
-	Headers          map[string]string `json:"-"`
-	CreatedAt        time.Time         `json:"createdAt"`
-	StartedAt        time.Time         `json:"startedAt"`
-	CompletedAt      time.Time         `json:"completedAt"`
-	UpdatedAt        time.Time         `json:"updatedAt"`
+	ExpectedChecksum string `json:"expectedChecksum,omitempty"`
+	// Restricted: the address came from a web page (the browser), so it may
+	// not reach loopback, private or link-local addresses, through redirects
+	// and resumes too.
+	Restricted  bool              `json:"restricted,omitempty"`
+	Headers     map[string]string `json:"-"`
+	CreatedAt   time.Time         `json:"createdAt"`
+	StartedAt   time.Time         `json:"startedAt"`
+	CompletedAt time.Time         `json:"completedAt"`
+	UpdatedAt   time.Time         `json:"updatedAt"`
 }
 
 // Clone returns a deep copy that shares no mutable state.
@@ -96,6 +100,9 @@ type CreateRequest struct {
 	SpeedLimit int64 `json:"speedLimit"`
 	// Checksum is an expected hash in any form ParseChecksum accepts.
 	Checksum string `json:"checksum"`
+	// Restricted marks an address from a web page (Download.Restricted).
+	// Only the app sets it, never a request from the UI.
+	Restricted bool `json:"-"`
 }
 
 // sensitiveHeaders are credentials. They are never persisted in plaintext,

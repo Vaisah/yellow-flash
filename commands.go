@@ -36,6 +36,11 @@ func (a *App) handleCommand(in ipc.Incoming) bool {
 	if a.closing.Load() {
 		return false
 	}
+	// What can't be done yet is refused now, while the browser still holds
+	// the download: the extension then leaves it to the browser.
+	if unsupportedFromBrowser(in.Cmd) != "" {
+		return false
+	}
 	select {
 	case a.commands <- in:
 		return true
@@ -82,6 +87,9 @@ func (a *App) dispatch(ctx context.Context, in ipc.Incoming) {
 		a.focusWindow(ctx)
 		runtime.EventsEmit(ctx, "app:show", cmd.Show)
 		return
+	case cmd.ExcludeSite != "" || cmd.PanelHideSite != "":
+		a.browserSite(ctx, cmd)
+		return
 	}
 	if a.ready() != nil {
 		a.notice(ctx, "error", "Yellow Flash is not ready to add downloads")
@@ -106,7 +114,9 @@ func (a *App) dispatch(ctx context.Context, in ipc.Incoming) {
 		a.notice(ctx, "error", fmt.Sprintf("Cannot download %s: %v", url, err))
 		return
 	}
-	if !cmd.Later && !cmd.Silent {
+	// A download from the browser starts at once: the Add URL dialog would
+	// lose its context (cookies, referer) and its restriction.
+	if !cmd.Browser && !cmd.Later && !cmd.Silent {
 		a.focusWindow(ctx)
 		runtime.EventsEmit(ctx, "app:add-url", AddPrefill{URL: url, Filename: cmd.Name, Directory: cmd.Dir})
 		return
@@ -124,6 +134,10 @@ func (a *App) addSilently(ctx context.Context, url string, cmd ipc.Command) {
 	req := domain.CreateRequest{
 		URL: url, Directory: dir, Filename: cmd.Name, Connections: s.Connections,
 		Headers: requestHeaders(cmd),
+		// An address from a web page may not reach this computer or its
+		// network (the browser's name, size and type are not trusted: the
+		// engine checks the name and asks the server for the rest).
+		Restricted: cmd.Browser,
 	}
 	var (
 		d   *domain.Download
