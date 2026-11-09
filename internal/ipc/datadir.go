@@ -19,6 +19,10 @@ import (
 // AppName names the data folder.
 const AppName = "Yellow Flash"
 
+// AppVersion is the app's version; the native host, which ships with it,
+// tells the extension the same.
+const AppVersion = "0.2.0"
+
 // DataDirEnv overrides the data folder: a separate instance with its own
 // list and channel (tests, screenshots).
 const DataDirEnv = "YELLOWFLASH_DATA_DIR"

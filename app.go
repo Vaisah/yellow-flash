@@ -29,7 +29,7 @@ import (
 // AppName is the product name shown in the window and used for app data.
 const (
 	AppName    = ipc.AppName
-	AppVersion = "0.2.0"
+	AppVersion = ipc.AppVersion
 )
 
 // errNotReady is returned when the UI calls in before startup finished.
