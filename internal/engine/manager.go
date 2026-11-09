@@ -71,6 +71,8 @@ type Config struct {
 	// HostLimitDecay is how long a learned limit lasts without being seen
 	// again (default 10 minutes).
 	HostLimitDecay time.Duration
+	// DNS is the resolver the default client uses; nil is the system's.
+	DNS *network.DNSChoice
 }
 
 const (
@@ -103,7 +105,7 @@ func (c Config) withDefaults() Config {
 		c.HostLimitDecay = hostLimitDecay
 	}
 	if c.Client == nil {
-		c.Client = network.NewClient(network.Options{AllowPrivate: c.AllowPrivateNetworks, MaxConnsPerHost: c.MaxConnections * 2})
+		c.Client = network.NewClient(network.Options{AllowPrivate: c.AllowPrivateNetworks, MaxConnsPerHost: c.MaxConnections * 2, DNS: c.DNS})
 	}
 	if c.Prober == nil {
 		c.Prober = network.NewProber(c.Client)

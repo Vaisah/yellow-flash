@@ -24,6 +24,7 @@ planner, the first-request download), is original to Yellow Flash.
 
 | Module | Licence | Used for | Since |
 |---|---|---|---|
+| `golang.org/x/net` | BSD-3-Clause | `dns/dnsmessage`, in the DNS tests' fake servers only; it was already an indirect dependency via Wails | port step 2b (`network/dns.go`) |
 | `golang.org/x/sys` | BSD-3-Clause | Windows file lock and foreground permission (`internal/platform/lock_windows.go`); it was already an indirect dependency via Wails | port step 1 (`internal/ipc`) |
 
 ## Third-party data and assets

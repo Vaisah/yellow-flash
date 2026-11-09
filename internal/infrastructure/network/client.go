@@ -38,6 +38,8 @@ type Options struct {
 	// AllowPrivate permits loopback, private and link-local destinations.
 	// Leave it false for untrusted (for example browser-originated) URLs.
 	AllowPrivate bool
+	// DNS is the resolver names are looked up with; nil is the system's.
+	DNS *DNSChoice
 }
 
 func (o Options) withDefaults() Options {
@@ -85,9 +87,15 @@ func NewClient(opts Options) *http.Client {
 	}
 	protocols := new(http.Protocols)
 	protocols.SetHTTP1(true)
+	var resolver *Resolver
+	if !opts.DNS.IsSystem() {
+		resolver = NewResolver(*opts.DNS)
+	}
+	// Names through the chosen DNS; a host's several addresses race.
+	hosts := &hostDialer{base: dialer, dns: resolver}
 	transport := &http.Transport{
 		Proxy:                 proxy,
-		DialContext:           dialer.DialContext,
+		DialContext:           hosts.DialContext,
 		Protocols:             protocols,
 		MaxIdleConns:          128,
 		MaxIdleConnsPerHost:   opts.MaxConnsPerHost,
