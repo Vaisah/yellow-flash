@@ -17,6 +17,7 @@ import (
 	domain "github.com/vaisah/internal/domain/download"
 	"github.com/vaisah/internal/infrastructure/filesystem"
 	"github.com/vaisah/internal/infrastructure/network"
+	"github.com/vaisah/internal/platform"
 )
 
 // readBufferSize bounds per-worker memory regardless of file size.
@@ -92,11 +93,20 @@ func (m *Manager) transferSegmented(ctx context.Context, e *entry, d *domain.Dow
 			return err
 		}
 	}
+	pl := newPlanner(segs, m.cfg.MinSegmentSize)
+	if err = checkSpace(d.Destination, meta.Size, meta.Size-pl.written()); err != nil {
+		first.close()
+		return err
+	}
+	// A fresh large file is made sparse before it is extended, so writing
+	// far into it does not make NTFS zero-fill everything before.
+	if info.Size() < meta.Size && meta.Size >= platform.SparseMinSize && pl.written() == 0 {
+		platform.SetSparse(f, true)
+	}
 	if err = filesystem.Preallocate(f, meta.Size); err != nil {
 		first.close()
 		return fmt.Errorf("preallocate: %w", err)
 	}
-	pl := newPlanner(segs, m.cfg.MinSegmentSize)
 	if err = m.store.SaveSegments(ctx, d.ID, pl.snapshot(d.ID)); err != nil {
 		first.close()
 		return err
@@ -176,7 +186,7 @@ func (m *Manager) transferSegmented(ctx context.Context, e *entry, d *domain.Dow
 				op = nil
 				if errors.Is(err, errYielded) {
 					pl.release(pt)
-					m.learnHostLimit(meta.URL, int(alive.Load()))
+					m.hostRefused(meta.URL, int(tr.receiving.Load()))
 					m.cfg.Logger.Info("server is limiting connections; continuing with fewer", "id", d.ID, "connections", alive.Load())
 					return nil
 				}
@@ -211,7 +221,7 @@ func (m *Manager) transferSegmented(ctx context.Context, e *entry, d *domain.Dow
 func (m *Manager) fetchPart(ctx context.Context, e *entry, f *os.File, pl *planner, pt *part, meta *domain.RemoteMetadata, headers http.Header, tr *tracker, buf []byte, yield func(Classification) bool, op *opened) error {
 	return m.withRetryYield(ctx, e, func() { pl.retried(pt) }, yield, func() (bool, error) {
 		before, _ := pl.span(pt)
-		err := m.fetchPartOnce(ctx, f, pl, pt, meta, headers, tr, buf, op)
+		err := m.fetchPartOnce(ctx, e, f, pl, pt, meta, headers, tr, buf, op)
 		op = nil
 		after, _ := pl.span(pt)
 		return after > before, err
@@ -220,7 +230,7 @@ func (m *Manager) fetchPart(ctx context.Context, e *entry, f *os.File, pl *plann
 
 // fetchPartOnce streams the rest of pt into the file. It stops as soon as
 // pt is complete, including when another connection split pt's tail off.
-func (m *Manager) fetchPartOnce(ctx context.Context, f *os.File, pl *planner, pt *part, meta *domain.RemoteMetadata, headers http.Header, tr *tracker, buf []byte, op *opened) error {
+func (m *Manager) fetchPartOnce(ctx context.Context, e *entry, f *os.File, pl *planner, pt *part, meta *domain.RemoteMetadata, headers http.Header, tr *tracker, buf []byte, op *opened) error {
 	from, end := pl.span(pt)
 	if from >= end {
 		op.close()
@@ -272,10 +282,22 @@ func (m *Manager) fetchPartOnce(ctx context.Context, f *os.File, pl *planner, pt
 	body := newIdleReader(res.Body, m.cfg.ReadIdleTimeout, onIdle)
 	defer body.stop()
 	pos := from
+	receiving := false
+	defer func() {
+		if receiving {
+			tr.receiving.Add(-1)
+		}
+	}()
 	for {
 		n, rerr := body.Read(buf)
 		if n > 0 {
-			if err := m.throttle(ctx, n); err != nil {
+			if !receiving {
+				// This connection is receiving data: the server allows at
+				// least this many at once.
+				receiving = true
+				m.hostWorking(meta.URL, int(tr.receiving.Add(1)))
+			}
+			if err := m.throttle(ctx, e, n); err != nil {
 				return err
 			}
 			allowed := pl.claim(pt, int64(n))
@@ -319,25 +341,38 @@ func changedValidators(h http.Header, meta *domain.RemoteMetadata) bool {
 
 // connectionsFor caps want at the limit learned for the URL's server.
 func (m *Manager) connectionsFor(rawURL string, want int) int {
-	host := hostOf(rawURL)
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if limit, ok := m.hostLimits[host]; ok && limit < want {
+	if limit, ok := m.hosts.limit(hostOf(rawURL)); ok && limit < want {
 		return max(1, limit)
 	}
 	return max(1, want)
 }
 
-// learnHostLimit remembers that a server accepts no more than n connections.
-func (m *Manager) learnHostLimit(rawURL string, n int) {
-	host := hostOf(rawURL)
-	if host == "" || n < 1 {
+// hostRefused records that the URL's server refused an extra connection
+// while working others were receiving data, and persists what was learned.
+func (m *Manager) hostRefused(rawURL string, working int) {
+	if host := hostOf(rawURL); host != "" {
+		l, _ := m.hosts.refused(host, working)
+		m.saveHostLimit(l)
+	}
+}
+
+// hostWorking records that n connections to the URL's server receive data.
+func (m *Manager) hostWorking(rawURL string, n int) {
+	if host := hostOf(rawURL); host != "" {
+		if l, changed := m.hosts.working(host, n); changed {
+			m.saveHostLimit(l)
+		}
+	}
+}
+
+func (m *Manager) saveHostLimit(l domain.HostLimit) {
+	if m.cfg.HostLimits == nil {
 		return
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if old, ok := m.hostLimits[host]; !ok || n < old {
-		m.hostLimits[host] = n
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := m.cfg.HostLimits.SaveHostLimit(ctx, l); err != nil {
+		m.cfg.Logger.Warn("save learned connection limit failed", "host", l.Host, "err", err)
 	}
 }
 
@@ -349,9 +384,15 @@ func hostOf(rawURL string) string {
 	return u.Host
 }
 
-// throttle waits for the global speed limiter.
-func (m *Manager) throttle(ctx context.Context, n int) error {
-	return m.limiter.WaitN(ctx, n)
+// throttle waits for the download's own limiter, then the global one.
+func (m *Manager) throttle(ctx context.Context, e *entry, n int) error {
+	m.mu.Lock()
+	own := e.limiter
+	m.mu.Unlock()
+	if err := own.Wait(ctx, n); err != nil {
+		return err
+	}
+	return m.limiter.Wait(ctx, n)
 }
 
 // transferStream downloads with one connection. It resumes with an open
@@ -377,6 +418,10 @@ func (m *Manager) transferStream(ctx context.Context, e *entry, d *domain.Downlo
 	if offset != 0 {
 		first.close() // the first request reads from byte 0
 		first = nil
+	}
+	if err = checkSpace(d.Destination, meta.Size, meta.Size-offset); err != nil {
+		first.close()
+		return err
 	}
 	if err = f.Truncate(offset); err != nil {
 		first.close()
@@ -419,7 +464,7 @@ func (m *Manager) transferStream(ctx context.Context, e *entry, d *domain.Downlo
 	buf := make([]byte, readBufferSize)
 	err = m.withRetry(wctx, e, nil, func() (bool, error) {
 		before := tr.bytes()
-		err := m.fetchStream(wctx, f, meta, headers, tr, buf, restart, first)
+		err := m.fetchStream(wctx, e, f, meta, headers, tr, buf, restart, first)
 		first = nil
 		return tr.bytes() > before, err
 	})
@@ -440,7 +485,7 @@ func (m *Manager) transferStream(ctx context.Context, e *entry, d *domain.Downlo
 // fetchStream performs one single-connection transfer from the current
 // offset, continuing op (the first request) when given. meta is updated
 // when the server reveals a new length.
-func (m *Manager) fetchStream(ctx context.Context, f *os.File, meta *domain.RemoteMetadata, headers http.Header, tr *tracker, buf []byte, restart func(func(*domain.Download)) error, op *opened) error {
+func (m *Manager) fetchStream(ctx context.Context, e *entry, f *os.File, meta *domain.RemoteMetadata, headers http.Header, tr *tracker, buf []byte, restart func(func(*domain.Download)) error, op *opened) error {
 	offset := tr.bytes()
 	if offset > 0 && !meta.RangeSupported {
 		if err := restart(nil); err != nil {
@@ -496,7 +541,7 @@ func (m *Manager) fetchStream(ctx context.Context, f *os.File, meta *domain.Remo
 			if v := res.Header.Get("Last-Modified"); v != "" {
 				meta.LastModified = v
 			}
-			meta.ChecksumAlgorithm, meta.Checksum = network.ChecksumFromHeaders(res.Header, true)
+			meta.Checksum = network.ChecksumFromHeaders(res.Header, true)
 			size, etag, lm := meta.Size, meta.ETag, meta.LastModified
 			if err := restart(func(d *domain.Download) { d.Size, d.ETag, d.LastModified = size, etag, lm }); err != nil {
 				return err
@@ -542,7 +587,7 @@ func (m *Manager) fetchStream(ctx context.Context, f *os.File, meta *domain.Remo
 		}
 		n, rerr := body.Read(buf[:want])
 		if n > 0 {
-			if err := m.throttle(ctx, n); err != nil {
+			if err := m.throttle(ctx, e, n); err != nil {
 				return err
 			}
 			if _, werr := f.WriteAt(buf[:n], off); werr != nil {

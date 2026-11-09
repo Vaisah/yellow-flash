@@ -24,7 +24,6 @@ import (
 	"github.com/vaisah/internal/infrastructure/filesystem"
 	"github.com/vaisah/internal/infrastructure/network"
 	"github.com/vaisah/internal/platform"
-	"golang.org/x/time/rate"
 )
 
 // Prober discovers remote metadata. *network.Prober satisfies it.
@@ -65,6 +64,12 @@ type Config struct {
 	ReadIdleTimeout time.Duration
 	// DefaultDirectory is used when a request has none (default ~/Downloads).
 	DefaultDirectory string
+	// HostLimits persists learned per-server connection limits; nil keeps
+	// them in memory only.
+	HostLimits domain.HostLimitStore
+	// HostLimitDecay is how long a learned limit lasts without being seen
+	// again (default 10 minutes).
+	HostLimitDecay time.Duration
 }
 
 const (
@@ -93,6 +98,9 @@ func (c Config) withDefaults() Config {
 	if c.ReadIdleTimeout <= 0 {
 		c.ReadIdleTimeout = 60 * time.Second
 	}
+	if c.HostLimitDecay <= 0 {
+		c.HostLimitDecay = hostLimitDecay
+	}
 	if c.Client == nil {
 		c.Client = network.NewClient(network.Options{AllowPrivate: c.AllowPrivateNetworks, MaxConnsPerHost: c.MaxConnections * 2})
 	}
@@ -118,6 +126,8 @@ type entry struct {
 	cancel  context.CancelFunc
 	done    chan struct{}
 	tracker *tracker
+	// limiter enforces the download's own speed limit while it runs.
+	limiter *Limiter
 }
 
 // Manager owns download lifecycles. It is the single authority for status
@@ -133,31 +143,41 @@ type Manager struct {
 	wg         sync.WaitGroup
 
 	// limiter caps the combined speed of all downloads (unlimited by default).
-	limiter *rate.Limiter
+	limiter *Limiter
+	// hosts holds learned per-server connection limits.
+	hosts *hostLimits
 
-	mu         sync.Mutex
-	items      map[string]*entry
-	stopping   bool
-	hostLimits map[string]int // connections each server was seen to accept
+	mu       sync.Mutex
+	items    map[string]*entry
+	stopping bool
 }
 
 // SetSpeedLimit caps the combined download speed in bytes per second;
 // 0 or less removes the limit. It applies at once to running downloads.
-func (m *Manager) SetSpeedLimit(bytesPerSecond int64) {
-	if bytesPerSecond <= 0 {
-		m.limiter.SetLimit(rate.Inf)
-		return
-	}
-	m.limiter.SetLimit(rate.Limit(bytesPerSecond))
-}
+func (m *Manager) SetSpeedLimit(bytesPerSecond int64) { m.limiter.Set(bytesPerSecond) }
 
 // SpeedLimit returns the current limit in bytes per second (0 = none).
-func (m *Manager) SpeedLimit() int64 {
-	if l := m.limiter.Limit(); l != rate.Inf {
-		return int64(l)
+func (m *Manager) SpeedLimit() int64 { return m.limiter.Rate() }
+
+// SetDownloadSpeedLimit caps one download in bytes per second (0 or less:
+// unlimited). It is persisted, and applies at once if the download runs.
+func (m *Manager) SetDownloadSpeedLimit(ctx context.Context, id string, bytesPerSecond int64) error {
+	e, err := m.entryFor(ctx, id)
+	if err != nil {
+		return err
 	}
-	return 0
+	bytesPerSecond = max(0, bytesPerSecond)
+	snap := m.update(e, func(d *domain.Download) { d.SpeedLimit = bytesPerSecond })
+	m.mu.Lock()
+	if e.limiter != nil {
+		e.limiter.Set(bytesPerSecond)
+	}
+	m.mu.Unlock()
+	return m.save(ctx, snap)
 }
+
+// HostLimits lists the per-server connection limits learned so far.
+func (m *Manager) HostLimits() []domain.HostLimit { return m.hosts.learned() }
 
 // New creates a Manager. store is required.
 func New(store domain.Store, cfg Config) (*Manager, error) {
@@ -170,8 +190,16 @@ func New(store domain.Store, cfg Config) (*Manager, error) {
 		policy = cfg.Retry.normalized()
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Manager{cfg: cfg, retry: policy, store: store, publisher: filesystem.NewPublisher(), baseCtx: ctx, baseCancel: cancel,
-		items: map[string]*entry{}, hostLimits: map[string]int{}, limiter: rate.NewLimiter(rate.Inf, readBufferSize)}, nil
+	m := &Manager{cfg: cfg, retry: policy, store: store, publisher: filesystem.NewPublisher(), baseCtx: ctx, baseCancel: cancel,
+		items: map[string]*entry{}, limiter: NewLimiter(0), hosts: newHostLimits(cfg.HostLimitDecay)}
+	if cfg.HostLimits != nil {
+		saved, err := cfg.HostLimits.LoadHostLimits(ctx)
+		if err != nil {
+			cfg.Logger.Warn("load learned connection limits failed", "err", err)
+		}
+		m.hosts.load(saved)
+	}
+	return m, nil
 }
 
 // managedHeaders are controlled by the engine and may not be overridden.
@@ -252,10 +280,18 @@ func (m *Manager) Create(ctx context.Context, req domain.CreateRequest) (*domain
 	if err != nil {
 		return nil, err
 	}
+	checksum, err := domain.ParseChecksum(req.Checksum)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", domain.ErrInvalidRequest, err)
+	}
+	if req.SpeedLimit < 0 {
+		return nil, fmt.Errorf("%w: speed limit must not be negative", domain.ErrInvalidRequest)
+	}
+	name = filesystem.FitName(dir, name)
 	now := time.Now().UTC()
 	d := &domain.Download{ID: uuid.NewString(), URL: u.String(), FilenameExplicit: explicit, Destination: dir,
 		Size: domain.UnknownSize, Connections: conns, Status: domain.Queued, QueueID: req.QueueID, Headers: public,
-		CreatedAt: now, UpdatedAt: now}
+		SpeedLimit: req.SpeedLimit, ExpectedChecksum: checksum.String(), CreatedAt: now, UpdatedAt: now}
 	m.mu.Lock()
 	d.Filename = m.reserveNameLocked(dir, name, d.ID)
 	d.TempPath = filesystem.TempPath(dir, d.Filename)
@@ -382,6 +418,11 @@ func (m *Manager) begin(ctx context.Context, id string, allowed ...domain.Status
 		return err
 	}
 	e.d.Error = ""
+	if e.limiter == nil {
+		e.limiter = NewLimiter(e.d.SpeedLimit)
+	} else {
+		e.limiter.Set(e.d.SpeedLimit)
+	}
 	runCtx, cancel := context.WithCancel(m.baseCtx)
 	e.cancel, e.done = cancel, make(chan struct{})
 	snap := e.d.Clone()

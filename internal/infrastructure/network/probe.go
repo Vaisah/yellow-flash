@@ -2,11 +2,7 @@ package network
 
 import (
 	"context"
-	"crypto/md5"
-	"crypto/sha256"
-	"encoding/base64"
 	"io"
-	"mime"
 	"net/http"
 	"strconv"
 	"strings"
@@ -197,63 +193,9 @@ func applyHeaders(meta *domain.RemoteMetadata, h http.Header, fullBody bool) {
 	if name := FilenameFromContentDisposition(h.Get("Content-Disposition")); name != "" {
 		meta.Filename = name
 	}
-	if algorithm, sum := ChecksumFromHeaders(h, fullBody); len(sum) > 0 {
-		meta.ChecksumAlgorithm, meta.Checksum = algorithm, sum
+	if sum := ChecksumFromHeaders(h, fullBody); !sum.IsZero() {
+		meta.Checksum = sum
 	}
-}
-
-// FilenameFromContentDisposition extracts the (unsanitized) filename,
-// decoding RFC 5987 filename* values. It returns "" when absent or malformed.
-func FilenameFromContentDisposition(value string) string {
-	if value == "" {
-		return ""
-	}
-	_, params, err := mime.ParseMediaType(value)
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(params["filename"])
-}
-
-// ChecksumFromHeaders returns a whole-file digest advertised by the server.
-// Repr-Digest and Digest describe the full representation; Content-MD5 and
-// Content-Digest describe the message body and are used only when fullBody
-// is true. Malformed values are ignored rather than trusted.
-func ChecksumFromHeaders(h http.Header, fullBody bool) (string, []byte) {
-	if fullBody {
-		if v := strings.TrimSpace(h.Get("Content-MD5")); v != "" {
-			if sum, err := base64.StdEncoding.DecodeString(v); err == nil && len(sum) == md5.Size {
-				return "md5", sum
-			}
-		}
-	}
-	names := []string{"Repr-Digest", "Digest"}
-	if fullBody {
-		names = append(names, "Content-Digest")
-	}
-	for _, header := range names {
-		for _, part := range strings.Split(h.Get(header), ",") {
-			name, value, ok := strings.Cut(strings.TrimSpace(part), "=")
-			if !ok {
-				continue
-			}
-			algorithm := strings.ToLower(strings.TrimSpace(name))
-			if algorithm == "sha256" {
-				algorithm = "sha-256"
-			}
-			if algorithm != "sha-256" && algorithm != "md5" {
-				continue
-			}
-			sum, err := base64.StdEncoding.DecodeString(strings.Trim(strings.TrimSpace(value), ":\""))
-			if err != nil {
-				continue
-			}
-			if (algorithm == "md5" && len(sum) == md5.Size) || (algorithm == "sha-256" && len(sum) == sha256.Size) {
-				return algorithm, sum
-			}
-		}
-	}
-	return "", nil
 }
 
 func parseLength(v string) (int64, bool) {

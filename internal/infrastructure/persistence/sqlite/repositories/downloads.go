@@ -16,7 +16,7 @@ func NewDownloads(db *sql.DB) *Downloads { return &Downloads{db: db} }
 
 const downloadColumns = `id,url,final_url,filename,filename_explicit,destination,temp_path,mime_type,etag,
 	last_modified,size,downloaded,range_supported,connections,retries,status,error,queue_id,
-	created_at,started_at,completed_at,updated_at`
+	speed_limit,expected_checksum,created_at,started_at,completed_at,updated_at`
 
 // Save upserts the download and replaces its headers in one transaction.
 // Credential headers are never written, even if a caller passes them.
@@ -27,18 +27,20 @@ func (r *Downloads) Save(ctx context.Context, d *domain.Download) error {
 	}
 	defer tx.Rollback()
 	_, err = tx.ExecContext(ctx, `INSERT INTO downloads(`+downloadColumns+`)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET url=excluded.url, final_url=excluded.final_url,
 		filename=excluded.filename, filename_explicit=excluded.filename_explicit,
 		destination=excluded.destination, temp_path=excluded.temp_path, mime_type=excluded.mime_type,
 		etag=excluded.etag, last_modified=excluded.last_modified, size=excluded.size,
 		downloaded=excluded.downloaded, range_supported=excluded.range_supported,
 		connections=excluded.connections, retries=excluded.retries, status=excluded.status,
-		error=excluded.error, queue_id=excluded.queue_id, started_at=excluded.started_at,
+		error=excluded.error, queue_id=excluded.queue_id, speed_limit=excluded.speed_limit,
+		expected_checksum=excluded.expected_checksum, started_at=excluded.started_at,
 		completed_at=excluded.completed_at, updated_at=excluded.updated_at`,
 		d.ID, d.URL, d.FinalURL, d.Filename, d.FilenameExplicit, d.Destination, d.TempPath, d.MIMEType,
 		d.ETag, d.LastModified, d.Size, d.Downloaded, d.RangeSupported, d.Connections, d.Retries,
-		string(d.Status), d.Error, nullableString(d.QueueID), stamp(d.CreatedAt), nullableStamp(d.StartedAt),
+		string(d.Status), d.Error, nullableString(d.QueueID), d.SpeedLimit, nullableString(d.ExpectedChecksum),
+		stamp(d.CreatedAt), nullableStamp(d.StartedAt),
 		nullableStamp(d.CompletedAt), stamp(d.UpdatedAt))
 	if err != nil {
 		return fmt.Errorf("save download: %w", err)
@@ -107,13 +109,15 @@ func scanDownloads(rows *sql.Rows) ([]domain.Download, error) {
 	out := []domain.Download{}
 	for rows.Next() {
 		var d domain.Download
-		var finalURL, mime, etag, lastModified, errText, queueID, status sql.NullString
+		var finalURL, mime, etag, lastModified, errText, queueID, status, checksum sql.NullString
 		var created, started, completed, updated sql.NullString
 		if err := rows.Scan(&d.ID, &d.URL, &finalURL, &d.Filename, &d.FilenameExplicit, &d.Destination,
 			&d.TempPath, &mime, &etag, &lastModified, &d.Size, &d.Downloaded, &d.RangeSupported,
-			&d.Connections, &d.Retries, &status, &errText, &queueID, &created, &started, &completed, &updated); err != nil {
+			&d.Connections, &d.Retries, &status, &errText, &queueID, &d.SpeedLimit, &checksum,
+			&created, &started, &completed, &updated); err != nil {
 			return nil, err
 		}
+		d.ExpectedChecksum = checksum.String
 		d.FinalURL, d.MIMEType, d.ETag = finalURL.String, mime.String, etag.String
 		d.LastModified, d.Error, d.QueueID = lastModified.String, errText.String, queueID.String
 		d.Status = domain.Status(status.String)

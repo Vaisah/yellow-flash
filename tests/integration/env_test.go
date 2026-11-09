@@ -91,7 +91,9 @@ func (e *env) open() {
 	if err != nil {
 		e.t.Fatal(err)
 	}
-	mgr, err := engine.New(store, e.cfg)
+	cfg := e.cfg
+	cfg.HostLimits = store // as the app does: learned limits survive restarts
+	mgr, err := engine.New(store, cfg)
 	if err != nil {
 		e.t.Fatal(err)
 	}

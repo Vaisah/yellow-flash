@@ -135,12 +135,12 @@ Each item names where it plugs in. Follow the existing pattern: domain types fir
 
 **Still to do in Phase 3, in order:**
 
-1. **Single-instance lock (urgent bug risk).** Two app instances on the same DB corrupt each other: each one's `Recover` pauses the other's live downloads. Set `options.App.SingleInstanceLock` in `main.go`, and focus the existing window on a second launch.
+1. **Single-instance lock: done (2026-11-09)**, by port step 1 (`internal/ipc`, see §9). We use our own lock rather than Wails' `SingleInstanceLock`, because it must be taken before the DB is opened and its channel also carries commands.
 2. **Maximum simultaneous downloads and a queue runner.** Add `internal/application/queue` (or extend `Service`). It holds QUEUED downloads and calls `Manager.Start` while `active < limit` (a setting, default 3), and listens to `DownloadChanged` events to start the next one.
    - Use the existing `queues` table and the `downloads.queue_id` column (migration v2).
    - Keep the engine unaware of queues.
    - Test: 5 adds with limit 2 never exceed 2 active, and all 5 complete.
-3. **Remember per-host connection limits across restarts.** Learning is already done in memory (`Manager.learnHostLimit`); what's missing is persisting it. When adaptive concurrency drops connections, record the stable count for the host in a new table, `host_limits(host, max_connections, updated_at)` (migration v3). Start future downloads from that host with it.
+3. **Remember per-host connection limits across restarts: done (2026-11-09)**, by port step 2a (`engine/hosts.go`, the `host_limits` table). The original plan follows for reference. When adaptive concurrency drops connections, record the stable count for the host in a new table, `host_limits(host, max_connections, updated_at)` (migration v3). Start future downloads from that host with it.
    - Hook: the `errYielded` branch in `transferSegmented` (`engine/worker.go`).
    - Expose it to the engine through a small port, so the engine doesn't import SQLite.
 4. **Dynamic segment splitting: done** (see above). Possible follow-up: drop a connection that is far slower than the others and re-split its remainder.
@@ -206,7 +206,7 @@ Each item names where it plugs in. Follow the existing pattern: domain types fir
 - **Sharing a database.** `cmd/engine-test -list` is read-only, but any other CLI command runs `Recover`. Don't point it at a database the app is using.
 
 **Tech debt (rough priority)**
-1. No single-instance lock (see Phase 3, item 1).
+1. ~~No single-instance lock~~: fixed by `internal/ipc`. `cmd/engine-test` still does not take the lock, so never point `-db` at the app's database.
 2. Errors are free text; the UI explains them by regex (`lib/errors.ts`). Store a structured kind and status on `Download` (for example `ErrorKind`, `HTTPStatus`), which also enables auto-retry.
 3. `Download.Retries` accumulates across attempts and resumes; it is not reset per run.
 4. In the desktop app the engine logger discards everything. Write a rotating log file in the data dir for support, and never log headers.
@@ -251,8 +251,8 @@ is at `C:\Users\Vaisah\Videos\Go\misterdownloadmanager-main`, version 0.5.1, GPL
 
 | # | MDM source | Go destination | Notes |
 |---|---|---|---|
-| 1 | `crates/ipc` | `internal/ipc` | Single-instance lock and token-protected local socket. This also fixes tech-debt item 1 (two app instances). It is needed by 2, 3, 6 and 7. |
-| 2 | `crates/engine` remainder: `hosts.rs`, `limiter.rs`, `naming.rs`, `verify.rs`, `ftp.rs`, `dns.rs`, `pac.rs`, `sites/gdrive.rs`, `sparse.rs`, `disk.rs` | `internal/engine`, `internal/infrastructure/network` | Persisted host limits, per-download limiter, FTP/FTPS, DoH/DoT, proxy auto-config, Google Drive links. Compare with our existing planner, retry and first request; keep whichever is better tested. |
+| 1 ✅ | `crates/ipc` (`lib.rs`, `api.rs`) | `internal/ipc`, `internal/platform/lock*.go`, `main.go`, `commands.go` | **Done 2026-11-09**; see "Step 1 notes" below. `browsers.rs`, `capture.rs` and `extension.rs` belong to the browser host and move to step 3. |
+| 2 ◐ | `crates/engine` remainder. **Done (2a):** `hosts.rs`, `limiter.rs`, `naming.rs`, `verify.rs`, `sparse.rs`, `disk.rs`. **To do (2b):** `sites/gdrive.rs`, `dns.rs`, `pac.rs`, `ftp.rs`, then queues and scheduler | `internal/engine`, `internal/infrastructure/network`, `internal/platform` | See "Step 2a notes". Compare with our existing planner, retry and first request; keep whichever is better tested. |
 | 3 | `crates/nmhost` + `extension/` | `cmd/nm-host`, `extension/` | Browser capture (Phase 4). The extension is JavaScript and can be ported nearly as is (GPL-3.0); change its IDs and name to Yellow Flash's own. |
 | 4 | `crates/tools` | `internal/tools` | yt-dlp and ffmpeg video, gallery-dl, run as separate programs, plus the adapter relay. |
 | 5 | `crates/torrent` | `internal/torrent` | Magnet links and .torrent files via anacrolix/torrent. |
@@ -261,9 +261,93 @@ is at `C:\Users\Vaisah\Videos\Go\misterdownloadmanager-main`, version 0.5.1, GPL
 | 8 | `crates/debrid`, `crates/extract`, `crates/geo`, `crates/crash` | `internal/...` | Debrid services, archive extraction, server location, crash reports. |
 | 9 | `crates/labserver` | `tests/lab` | Their fault-injecting HTTP/FTP server; merge it with our `fileServer`. |
 
+### Step 1 notes (`internal/ipc`)
+
+**How it works.**
+- `main.go` parses an IDM-style command line (`ipc.ParseArgs`) and tries `ipc.Send` to a running instance.
+- If none answers, it takes `ipc.Lock` (an OS lock on `instance.lock`: `flock` on Linux, `LockFileEx` on Windows) **before** opening the DB.
+- It then serves `127.0.0.1:<random>` and writes `ipc.json` `{port, token, pid}`, mode 0600, removed again on clean exit.
+- A launch that loses the race keeps retrying "send, or take the lock" for 10 s, so it also takes over from an instance that is quitting. MDM only retried the send.
+- Before sending, a second launch calls `platform.AllowForeground(pid)` so the running app may raise its window on Windows.
+
+**Kept from MDM.**
+- One JSON line per request, one answer line back: `ok`, `denied`, `gone`, `too-large`, `timeout` or JSON.
+- Limits: requests up to 2 MiB within 3 s, at most 8 connections at once.
+- No answer to HTTP requests (web pages probing the port).
+- The token is compared in constant time.
+
+**Changed from MDM.**
+- Download IDs in the API are UUID strings.
+- A line starting with `{` is never taken for HTTP. MDM's check dropped JSON whose last word began with `HTTP/`.
+- The token has 256 bits from `crypto/rand`.
+- Relative `/p` and `.torrent` paths are resolved in the sending process.
+- The data folder logic moved from `app.go` to `ipc.DataDir`. `YELLOWFLASH_DATA_DIR` overrides it, and a writable `data` folder next to the exe gives portable mode.
+
+**How the app handles commands** (`commands.go`). Commands are queued until `OnDomReady`, then:
+- plain launch: focus the window;
+- `/d`: open Add URL, pre-filled with `/f` and `/p`;
+- `/d … /n`: add and start; `/d … /a`: add only. Both report the result as a toast through the `app:notice` event;
+- `/s`: `ResumeAll` (a stand-in until the queue runner exists);
+- `/exit`: quit;
+- `/show`: emits `app:show`. The UI does not handle that event yet.
+
+After `Shutdown` starts, commands are answered `gone`. MDM saved pending URLs to the queue instead.
+
+**Not done yet.**
+- Queries and actions (`query`, `action`, `api`, `pair`) all get `{"error":…,"code":"api-off"}`. Implement the automation API in step 7, using the answer types in `ipc/api.go`.
+- MDM's JSON Schema generation (`docs/automation-api.schema.json`) is not ported; add it with step 7.
+- Browser fields (`cookie_jar`, `post`, `proxy`, `video_page`, `links`, …) are parsed but ignored, except Referer, Cookie and User-Agent, which become request headers. Wire them in step 3, together with the `AllowPrivate: false` client for browser-originated downloads (§5, Phase 4).
+- Magnet links and `.torrent` files are rejected with a toast until step 5.
+
+**Verified.**
+- `go test -race` passes for `internal/ipc` and `internal/platform`; the tests port every MDM ipc test plus end-to-end `Serve`/`Send` tests.
+- The built exe was tested by hand with `YELLOWFLASH_DATA_DIR` set: a second launch with `/d … /a` handed over in about 50 ms and the download appeared as QUEUED; `/exit` quit the app and removed `ipc.json`.
+
+### Step 2a notes (engine: hosts, limiter, verify, naming, sparse, disk)
+
+**Learned host limits** (`engine/hosts.go`, from `hosts.rs`)
+- These replace `Manager.hostLimits`. The cap is the **most** connections seen receiving data when a refusal came. The old code kept the minimum, which can learn 1 for a host that allows 2.
+- A cap applies after 2 refusals and is forgotten 10 minutes after it was last seen (`Config.HostLimitDecay`).
+- "Receiving" is the new `tracker.receiving` counter: it counts connections that got their first byte, not ones still connecting.
+- Learned caps are saved through `domain.HostLimitStore` (`Config.HostLimits`). The SQLite store implements it with the `host_limits` table (migration v3), and `app.go` passes the store.
+- Verified: `TestLearnedHostLimitSurvivesRestart` learns 2 from a 2-connection server, and after a restart the next download gets **0** refusals.
+
+**Speed limits** (`engine/limiter.go`, from `limiter.rs`)
+- One token bucket with a 1 s burst now serves both the global limit (`SetSpeedLimit`) and a new per-download limit. `golang.org/x/time` is no longer used.
+- The per-download limit is set by `CreateRequest.SpeedLimit` or `Manager.SetDownloadSpeedLimit`, which persists it in `downloads.speed_limit` and changes it live.
+- Not yet in `Service`, the app bindings or the UI.
+
+**Checksums** (`domain/download/checksum.go`, `network/headers.go`, `engine/verifier.go`, from `verify.rs`)
+- Supported: CRC32, MD5, SHA-1, SHA-256 and SHA-512.
+- From the server: Repr-Digest, Digest, Content-MD5, Content-Digest and `x-goog-hash`; the strongest one wins.
+- `RemoteMetadata.Checksum` is now a `domain.Checksum`.
+- A user checksum (`CreateRequest.Checksum`, any form `ParseChecksum` accepts, such as `sha256sum` output) is validated by `Create`, stored as `downloads.expected_checksum`, and takes precedence over the server's.
+
+**File names** (`network/headers.go`, `filesystem/naming.go`, from `naming.rs`)
+- `Content-Disposition` is parsed as browsers do: `filename*` wins, plain names are percent-decoded, and a parameter with no disposition type is accepted.
+- Unicode format characters (RTL overrides and the like) are dropped, and every Windows device name is handled (CONIN$, COM¹…).
+- `FitName` shortens names to fit Windows' 259-character path limit, keeping the extension. We kept our 200-**byte** name cap: MDM's 230-UTF-16-unit cap can exceed ext4's 255-byte limit.
+
+**Disk** (`platform/disk*.go`, `engine/disk.go`, from `disk.rs` and `sparse.rs`)
+- Before writing, the engine checks free space (the bytes still to write plus a 128 MiB margin) and FAT32's 4 GiB limit; failures return `domain.ErrNoSpace` or `domain.ErrTooBigForFileSystem`. The probe gives up after 5 s (a hung network drive), and an unknown volume skips the check.
+- On Windows, new files of 5 MiB or more are made sparse before preallocation, so NTFS doesn't zero-fill ahead of far writes, and are made normal again before verification.
+- Linux probes with `statfs`; other systems skip the check.
+
+**Not ported from these files:** `Stems`/`stem_destination` (they come with yt-dlp in step 4) and MDM's process-wide destination reservations (`Manager.reserveNameLocked` already does this).
+
+**Verified:** all tests pass on Windows and under `-race` on Linux. Ported tests are in `engine/ported_test.go`, `filesystem/naming_test.go`, `domain/download/checksum_test.go`, `network/network_test.go`, `platform/disk_windows_test.go` and `tests/integration/ported_test.go`.
+
+**Next (2b), in order:**
+1. `sites/gdrive.rs` → `network` (Google Drive confirm pages; extends `UnwrapLink`).
+2. `dns.rs` → `network` (DoH/DoT resolver for the dial guard).
+3. `pac.rs` → `network`. Needs a JavaScript engine: `github.com/dop251/goja` (MIT) is the likely pick; record it in NOTICE.md.
+4. `ftp.rs` → a new FTP transport (`github.com/jlaffaye/ftp`, MIT).
+5. Queues and scheduler from `crates/app` and `docs/queues-and-scheduler.md`, which also cover Phase 3 items 2 and 6.
+
 Not ported: `crates/app` (their egui desktop UI), since Yellow Flash's UI is Wails + React. Port
 its *behaviour* (queues, scheduler, settings) into Go services and the React UI as each feature
 is needed.
 
-Queues and the scheduler (previously the next task) live in their app crate, so port them in
-step 1 or 2 time, reading `crates/app/src/` and `docs/queues-and-scheduler.md`.
+Queues and the scheduler (previously the next task) live in their app crate. Step 1 did not
+include them; port them alongside step 2, reading `crates/app/src/` and
+`docs/queues-and-scheduler.md`. Once the queue runner exists, `/s` and `/a … queue` should use it.

@@ -108,7 +108,7 @@ func (a *App) Startup(ctx context.Context) {
 	})
 	// URLs typed by the user may legitimately point at LAN hosts (NAS,
 	// intranet). Browser-originated requests will use a restricted client.
-	manager, err := engine.New(a.store, engine.Config{AllowPrivateNetworks: true, Publisher: publisher})
+	manager, err := engine.New(a.store, engine.Config{AllowPrivateNetworks: true, Publisher: publisher, HostLimits: a.store})
 	if err != nil {
 		runtime.LogErrorf(ctx, "start download engine: %v", err)
 		return

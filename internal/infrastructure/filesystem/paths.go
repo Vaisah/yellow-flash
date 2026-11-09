@@ -22,19 +22,24 @@ const TempSuffix = ".part"
 // 255-byte component limit of NTFS, ext4 and friends.
 const maxNameBytes = 200
 
-var windowsReserved = map[string]bool{"CON": true, "PRN": true, "AUX": true, "NUL": true}
+var windowsReserved = map[string]bool{"CON": true, "PRN": true, "AUX": true, "NUL": true, "CONIN$": true, "CONOUT$": true}
 
 // SanitizeFilename turns untrusted input (user text, URL paths, or
 // Content-Disposition values) into a single safe path component that is
 // valid on both Windows and Linux. Directory parts are discarded, so the
-// result can never traverse outside the destination directory.
+// result can never traverse outside the destination directory. Invisible
+// format characters are dropped: a right-to-left override would show
+// "invoice‮fdp.exe" as "invoiceexe.pdf".
 func SanitizeFilename(name string) (string, error) {
 	name = strings.ReplaceAll(name, `\`, "/")
 	if name = path.Base(name); name == "/" {
 		return "", ErrInvalidFilename
 	}
 	name = strings.Map(func(r rune) rune {
-		if r < 32 || r == 127 || strings.ContainsRune(`<>:"/\|?*`, r) {
+		if isFormatChar(r) {
+			return -1
+		}
+		if r < 32 || (r >= 127 && r < 160) || strings.ContainsRune(`<>:"/\|?*`, r) {
 			return '_'
 		}
 		return r
@@ -43,8 +48,7 @@ func SanitizeFilename(name string) (string, error) {
 	if name == "" || name == "." || name == ".." {
 		return "", ErrInvalidFilename
 	}
-	if base := strings.ToUpper(strings.SplitN(name, ".", 2)[0]); windowsReserved[base] ||
-		(len(base) == 4 && (strings.HasPrefix(base, "COM") || strings.HasPrefix(base, "LPT")) && base[3] >= '1' && base[3] <= '9') {
+	if isReservedDeviceName(name) {
 		name = "_" + name
 	}
 	name = strings.TrimRight(truncateKeepingExtension(name, maxNameBytes), ". ")

@@ -14,11 +14,15 @@ type Store struct {
 	db *sql.DB
 	*repositories.Downloads
 	*repositories.Segments
+	*repositories.HostLimits
 	settings *repositories.Settings
 	queues   *repositories.Queues
 }
 
-var _ domain.Store = (*Store)(nil)
+var (
+	_ domain.Store          = (*Store)(nil)
+	_ domain.HostLimitStore = (*Store)(nil)
+)
 
 // Open opens (creating if needed) and migrates the database at path.
 func Open(path string) (*Store, error) { return OpenContext(context.Background(), path) }
@@ -30,11 +34,12 @@ func OpenContext(ctx context.Context, path string) (*Store, error) {
 		return nil, err
 	}
 	return &Store{
-		db:        db,
-		Downloads: repositories.NewDownloads(db),
-		Segments:  repositories.NewSegments(db),
-		settings:  repositories.NewSettings(db),
-		queues:    repositories.NewQueues(db),
+		db:         db,
+		Downloads:  repositories.NewDownloads(db),
+		Segments:   repositories.NewSegments(db),
+		HostLimits: repositories.NewHostLimits(db),
+		settings:   repositories.NewSettings(db),
+		queues:     repositories.NewQueues(db),
 	}, nil
 }
 

@@ -21,7 +21,10 @@ const (
 type tracker struct {
 	downloaded atomic.Int64
 	active     atomic.Int32
-	total      atomic.Int64
+	// receiving counts connections that have received data in their
+	// current response (active also counts ones still connecting).
+	receiving atomic.Int32
+	total     atomic.Int64
 
 	mu           sync.Mutex
 	sessionStart time.Time

@@ -234,7 +234,7 @@ func (m *Manager) applyMetadata(ctx context.Context, e *entry, meta domain.Remot
 				name = sanitized
 			}
 		}
-		name = filesystem.WithExtension(name, filesystem.ExtensionForMIME(meta.MIMEType))
+		name = filesystem.FitName(d.Destination, filesystem.WithExtension(name, filesystem.ExtensionForMIME(meta.MIMEType)))
 		if name != d.Filename {
 			d.Filename = m.reserveNameLocked(d.Destination, name, d.ID)
 			d.TempPath = filesystem.TempPath(d.Destination, d.Filename)
@@ -268,7 +268,15 @@ func (m *Manager) complete(ctx context.Context, e *entry, meta domain.RemoteMeta
 	if err = m.save(ctx, snap); err != nil {
 		return err
 	}
-	size, err := verifyFile(ctx, snap.TempPath, meta)
+	// Every byte is written: the file stops being sparse (clearing it
+	// allocates any holes, so only a complete file is cleared).
+	if meta.Size >= platform.SparseMinSize {
+		if f, ferr := os.OpenFile(snap.TempPath, os.O_RDWR, 0); ferr == nil {
+			platform.SetSparse(f, false)
+			_ = f.Close()
+		}
+	}
+	size, err := verifyFile(ctx, snap.TempPath, meta, snap.ExpectedChecksum)
 	if err != nil {
 		if errors.Is(err, ErrIntegrity) {
 			// Corrupt data must not be resumed; a retry starts clean.

@@ -56,6 +56,18 @@ var migrations = []migration{
 			`DROP TABLE IF EXISTS schema_version`,
 		},
 	},
+	{
+		// Ported features from Mister Download Manager: per-download speed
+		// limits, user-given checksums, learned per-host connection limits.
+		version: 3,
+		statements: []string{
+			`ALTER TABLE downloads ADD COLUMN speed_limit INTEGER NOT NULL DEFAULT 0`,
+			`ALTER TABLE downloads ADD COLUMN expected_checksum TEXT`,
+			`CREATE TABLE IF NOT EXISTS host_limits(
+				host TEXT PRIMARY KEY, max_connections INTEGER NOT NULL, seen INTEGER NOT NULL,
+				updated_at TEXT NOT NULL)`,
+		},
+	},
 }
 
 // SchemaVersion is the newest schema this build understands.
