@@ -28,6 +28,9 @@ planner, the first-request download), is original to Yellow Flash.
 
 ## Third-party data and assets
 
+- `internal/infrastructure/network/sites/testdata/drive-*.html`: Google Drive page samples (test
+  data) from Mister Download Manager's `crates/engine/tests/data`, GPL-3.0-or-later.
+
 Assets ported from Mister Download Manager keep their own licences, as listed in its
 `ATTRIBUTION.md`. When one of them is added to this repository, list it here with its author,
 licence and path, for example the DB-IP IP-to-Country Lite data (CC BY 4.0, which requires the

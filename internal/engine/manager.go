@@ -23,6 +23,7 @@ import (
 	domain "github.com/vaisah/internal/domain/download"
 	"github.com/vaisah/internal/infrastructure/filesystem"
 	"github.com/vaisah/internal/infrastructure/network"
+	"github.com/vaisah/internal/infrastructure/network/sites"
 	"github.com/vaisah/internal/platform"
 )
 
@@ -242,6 +243,9 @@ func (m *Manager) Create(ctx context.Context, req domain.CreateRequest) (*domain
 	u, err := network.ValidateURL(network.UnwrapLink(req.URL))
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", domain.ErrInvalidRequest, err)
+	}
+	if r := sites.NotAFile(u); r != nil { // a Google Drive folder
+		return nil, fmt.Errorf("%w: %w", domain.ErrInvalidRequest, r)
 	}
 	dir := strings.TrimSpace(req.Directory)
 	if dir == "" {

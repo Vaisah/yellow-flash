@@ -108,6 +108,7 @@ func NewClient(opts Options) *http.Client {
 			if _, err := ValidateURL(req.URL.String()); err != nil {
 				return fmt.Errorf("redirect rejected: %w", err)
 			}
+			keepCredentialsWithinParty(req, via)
 			return nil
 		},
 	}

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	domain "github.com/vaisah/internal/domain/download"
+	"github.com/vaisah/internal/infrastructure/network/sites"
 )
 
 // UserAgent is sent when the caller supplies none.
@@ -34,6 +35,11 @@ func (p *Prober) Probe(ctx context.Context, rawURL string, headers http.Header) 
 	if _, err := ValidateURL(rawURL); err != nil {
 		return meta, err
 	}
+	rawURL, err := siteURL(rawURL)
+	if err != nil {
+		return meta, err
+	}
+	meta.URL = rawURL
 	headOK := false
 	if res, err := p.Request(ctx, http.MethodHead, rawURL, headers, ""); err == nil {
 		_ = res.Body.Close()
@@ -49,7 +55,7 @@ func (p *Prober) Probe(ctx context.Context, rawURL string, headers http.Header) 
 		return meta, ctx.Err()
 	}
 
-	res, err := p.Request(ctx, http.MethodGet, meta.URL, headers, RangeHeader(0, 0))
+	res, err := p.siteGet(ctx, meta.URL, headers, RangeHeader(0, 0))
 	if err != nil {
 		return meta, err
 	}
@@ -103,7 +109,7 @@ func (p *Prober) Open(ctx context.Context, rawURL string, headers http.Header) (
 	if _, err := ValidateURL(rawURL); err != nil {
 		return meta, nil, err
 	}
-	res, err := p.Request(ctx, http.MethodGet, rawURL, headers, RangeHeader(0, -1))
+	res, err := p.siteGet(ctx, rawURL, headers, RangeHeader(0, -1))
 	if err != nil {
 		return meta, nil, err
 	}
@@ -167,7 +173,13 @@ func NewRequest(ctx context.Context, method, rawURL string, headers http.Header,
 		req.Header[name] = append([]string(nil), values...)
 	}
 	if req.Header.Get("User-Agent") == "" {
-		req.Header.Set("User-Agent", UserAgent)
+		// A site's hosts may want a browser's agent (Google Drive's file
+		// host answers some others with 500); one the caller gave wins.
+		if ua := sites.UserAgent(req.URL); ua != "" {
+			req.Header.Set("User-Agent", ua)
+		} else {
+			req.Header.Set("User-Agent", UserAgent)
+		}
 	}
 	req.Header.Set("Accept-Encoding", "identity")
 	if rangeHeader != "" {
