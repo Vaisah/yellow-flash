@@ -121,23 +121,30 @@ tests/integration/          end-to-end tests against a configurable httptest ser
 
 Each item names where it plugs in. Follow the existing pattern: domain types first, then engine or service, then an integration test in `tests/integration` with a `fileServer` knob (see `server_test.go`), then UI.
 
-### Phase 3: download management (start here)
+### Phase 3: download management (in progress)
 
-**Do these first, in order:**
+**Done (2026-11-09).** These features were designed after studying Mister Download Manager (GPL-3.0) as a reference only; none of its code was copied:
+- **No probe round trips for new downloads.** `network.Prober.Open` sends `Range: bytes=0-`. The answer gives size and range support, and its body is the file, so data flows from the first request. Small files finish on one request. Resumed downloads still probe first, so their validators are checked.
+- **Dynamic splitting (work stealing).** The planner is in `engine/planner.go`. A free connection takes an unassigned part, or else the upper half of the largest unclaimed remainder. Claim/commit stops a split from cutting into bytes being written. It is tested with a 200-seed random simulation.
+- **Connection reuse.** A finished part reads to end-of-stream so the connection returns to the pool.
+- **Learned per-server connection limits.** These are kept in memory in `Manager.hostLimits`; persisting them is still to do.
+- **Immediate first retry** for network blips.
+- **Global speed limiter**: `Manager.SetSpeedLimit` (`golang.org/x/time/rate`). It is not yet exposed in the UI.
+- **Measured:** a real 100 MB download from a connection-limiting server took 21 s with 0 retries. Before, it failed with 429s and the retried run took minutes. A 62 KB file over a slow-TLS CDN took 1.5 s; `curl` took 2.6 s for the same file.
+- **Licence:** as of 2026-11-09 Yellow Flash is **GPL-3.0-or-later** (see `LICENSE`, `NOTICE.md`), so code may now be ported from Mister Download Manager. Follow the porting rules in §9.
+
+**Still to do in Phase 3, in order:**
 
 1. **Single-instance lock (urgent bug risk).** Two app instances on the same DB corrupt each other: each one's `Recover` pauses the other's live downloads. Set `options.App.SingleInstanceLock` in `main.go`, and focus the existing window on a second launch.
 2. **Maximum simultaneous downloads and a queue runner.** Add `internal/application/queue` (or extend `Service`). It holds QUEUED downloads and calls `Manager.Start` while `active < limit` (a setting, default 3), and listens to `DownloadChanged` events to start the next one.
    - Use the existing `queues` table and the `downloads.queue_id` column (migration v2).
    - Keep the engine unaware of queues.
    - Test: 5 adds with limit 2 never exceed 2 active, and all 5 complete.
-3. **Remember per-host connection limits.** When adaptive concurrency drops connections, record the stable count for the host in a new table, `host_limits(host, max_connections, updated_at)` (migration v3). Start future downloads from that host with it.
+3. **Remember per-host connection limits across restarts.** Learning is already done in memory (`Manager.learnHostLimit`); what's missing is persisting it. When adaptive concurrency drops connections, record the stable count for the host in a new table, `host_limits(host, max_connections, updated_at)` (migration v3). Start future downloads from that host with it.
    - Hook: the `errYielded` branch in `transferSegmented` (`engine/worker.go`).
    - Expose it to the engine through a small port, so the engine doesn't import SQLite.
-4. **Dynamic segment splitting (IDM's main speed trick).** When the queue is empty and a worker is idle, split the largest remaining segment and give the tail to the idle worker.
-   - Constraints: `validLayout` requires contiguous tiling, and segment IDs are `"<id>-<index>"`.
-   - Splitting must append new segments while keeping tiling valid. Re-index, or move to `start_byte` ordering plus generated IDs, plus a migration.
-   - Persist the new layout atomically (`SaveSegments` is transactional).
-5. **Bandwidth limiting.** Use a global token bucket (`golang.org/x/time/rate`) wrapped around the body reader in `fetchRange` and `fetchStream` (`worker.go`). Make the limit a setting, adjustable live; per-download limits are optional.
+4. **Dynamic segment splitting: done** (see above). Possible follow-up: drop a connection that is far slower than the others and re-split its remainder.
+5. **Bandwidth limiting: engine done** (`Manager.SetSpeedLimit`). Still to do: a Settings or toolbar control, persisting the limit, and per-download limits.
 6. **Scheduler.** Start or stop a queue at set times. Live this in the queue runner; persist schedules in `queues` or a new `schedules` table.
 7. **Duplicate detection.** In `Service.Create`, find existing downloads with the same `URL`/`FinalURL` and ask the user (UI: "Already downloaded — open / download again").
 8. **Automatic retry of failed downloads.** A delayed re-`Retry` for transient failure kinds only. Store a structured error kind; see the tech debt list.
@@ -210,3 +217,53 @@ Each item names where it plugs in. Follow the existing pattern: domain types fir
 ## 8. Original specification
 
 The full brief (phases, the 20 required test scenarios, and security requirements) was given at project start. Its Phase 1 and 2 requirements are mapped to code and tests in `DEVELOPMENT_PROGRESS.md`. The security requirements in §14 of the brief (SSRF, path traversal, safe overwrite, bounded memory and workers, timeouts, secret storage) are implemented for the engine. Keep them in mind for the browser-facing work in Phase 4.
+
+## 9. Porting Mister Download Manager's backend to Go
+
+The owner chose (2026-11-09) to port Mister Download Manager's whole backend to Go. Its source
+is at `C:\Users\Vaisah\Videos\Go\misterdownloadmanager-main`, version 0.5.1, GPL-3.0-or-later,
+© 2026 Ahmed Nefzaoui. Yellow Flash is GPL-3.0-or-later as a result.
+
+### Rules for every ported file
+
+1. Start the file with this header, filling in the Rust source path:
+   ```go
+   // Ported from Mister Download Manager, crates/<crate>/src/<file>.rs
+   // Copyright (C) 2026 Ahmed Nefzaoui and contributors; Go port (C) 2026 the Yellow Flash contributors.
+   // Translated from Rust to Go and modified. SPDX-License-Identifier: GPL-3.0-or-later
+   ```
+2. Keep Yellow Flash's architecture and its six engine rules (§3). Port behaviour into the
+   existing packages instead of recreating their crate layout. The engine stays free of UI,
+   SQLite and OS APIs.
+3. **Rust dependencies have Go counterparts:**
+   - `reqwest` → `net/http` with our `network` client
+   - `tokio` tasks → goroutines and `context`
+   - `librqbit` (torrents) → `github.com/anacrolix/torrent` (MPL-2.0, compatible with GPL-3.0)
+   - `craft-*` atomic saves → our SQLite transactions
+
+   Record each new dependency's licence in `NOTICE.md`.
+4. Port their tests along with the code (they have many: planner simulations, lab-server
+   end-to-end tests). A port is done only when its tests pass under `go test -race`.
+5. Assets (icons, the geo table, flags) keep their own licences; add each to `NOTICE.md` when
+   copied.
+
+### Port order (each step builds on the previous)
+
+| # | MDM source | Go destination | Notes |
+|---|---|---|---|
+| 1 | `crates/ipc` | `internal/ipc` | Single-instance lock and token-protected local socket. This also fixes tech-debt item 1 (two app instances). It is needed by 2, 3, 6 and 7. |
+| 2 | `crates/engine` remainder: `hosts.rs`, `limiter.rs`, `naming.rs`, `verify.rs`, `ftp.rs`, `dns.rs`, `pac.rs`, `sites/gdrive.rs`, `sparse.rs`, `disk.rs` | `internal/engine`, `internal/infrastructure/network` | Persisted host limits, per-download limiter, FTP/FTPS, DoH/DoT, proxy auto-config, Google Drive links. Compare with our existing planner, retry and first request; keep whichever is better tested. |
+| 3 | `crates/nmhost` + `extension/` | `cmd/nm-host`, `extension/` | Browser capture (Phase 4). The extension is JavaScript and can be ported nearly as is (GPL-3.0); change its IDs and name to Yellow Flash's own. |
+| 4 | `crates/tools` | `internal/tools` | yt-dlp and ffmpeg video, gallery-dl, run as separate programs, plus the adapter relay. |
+| 5 | `crates/torrent` | `internal/torrent` | Magnet links and .torrent files via anacrolix/torrent. |
+| 6 | `crates/remote` | `internal/remote` | Phone or LAN remote control over HTTPS with pairing. |
+| 7 | `crates/cli`, `crates/mcp` | `cmd/engine-test` → `cmd/yellowflash-cli`, `cmd/yellowflash-mcp` | Automation API. |
+| 8 | `crates/debrid`, `crates/extract`, `crates/geo`, `crates/crash` | `internal/...` | Debrid services, archive extraction, server location, crash reports. |
+| 9 | `crates/labserver` | `tests/lab` | Their fault-injecting HTTP/FTP server; merge it with our `fileServer`. |
+
+Not ported: `crates/app` (their egui desktop UI), since Yellow Flash's UI is Wails + React. Port
+its *behaviour* (queues, scheduler, settings) into Go services and the React UI as each feature
+is needed.
+
+Queues and the scheduler (previously the next task) live in their app crate, so port them in
+step 1 or 2 time, reading `crates/app/src/` and `docs/queues-and-scheduler.md`.

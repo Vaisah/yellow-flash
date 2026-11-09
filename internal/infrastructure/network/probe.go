@@ -95,6 +95,61 @@ func (p *Prober) Probe(ctx context.Context, rawURL string, headers http.Header) 
 	return meta, nil
 }
 
+// Open sends a download's first request and returns its metadata together
+// with the open response, whose body is the file from byte 0. It asks for
+// "bytes=0-": a 206 answer proves range support and gives the total size in
+// the same round trip, so no separate probe requests are needed and data
+// starts flowing at once (small files finish on this one request). A 200
+// means the server ignores ranges. A malformed range answer falls back to a
+// plain GET. resp is nil only for an empty file. The caller must close resp.
+func (p *Prober) Open(ctx context.Context, rawURL string, headers http.Header) (domain.RemoteMetadata, *http.Response, error) {
+	meta := domain.RemoteMetadata{URL: rawURL, Size: domain.UnknownSize}
+	if _, err := ValidateURL(rawURL); err != nil {
+		return meta, nil, err
+	}
+	res, err := p.Request(ctx, http.MethodGet, rawURL, headers, RangeHeader(0, -1))
+	if err != nil {
+		return meta, nil, err
+	}
+	meta.URL = res.Request.URL.String()
+	switch res.StatusCode {
+	case http.StatusPartialContent:
+		if cr, err := ParseContentRange(res.Header.Get("Content-Range")); err == nil && cr.Start == 0 {
+			applyHeaders(&meta, res.Header, cr.Total >= 0 && cr.End == cr.Total-1)
+			meta.RangeSupported, meta.Size = true, cr.Total
+			return meta, res, nil
+		}
+		_ = res.Body.Close()
+	case http.StatusOK:
+		applyHeaders(&meta, res.Header, true)
+		meta.Size = res.ContentLength
+		return meta, res, nil
+	case http.StatusRequestedRangeNotSatisfiable:
+		if total, ok := ParseUnsatisfiedRange(res.Header.Get("Content-Range")); ok && total == 0 {
+			applyHeaders(&meta, res.Header, true)
+			meta.Size = 0
+			_ = res.Body.Close()
+			return meta, nil, nil
+		}
+		_ = res.Body.Close()
+	default:
+		_ = res.Body.Close()
+		return meta, nil, NewStatusError(res)
+	}
+	// The server mishandled the range request: download without ranges.
+	res, err = p.Request(ctx, http.MethodGet, meta.URL, headers, "")
+	if err != nil {
+		return meta, nil, err
+	}
+	if res.StatusCode != http.StatusOK {
+		_ = res.Body.Close()
+		return meta, nil, NewStatusError(res)
+	}
+	applyHeaders(&meta, res.Header, true)
+	meta.RangeSupported, meta.Size = false, res.ContentLength
+	return meta, res, nil
+}
+
 // Request issues a request with the caller's headers, identity encoding and
 // an optional Range header.
 func (p *Prober) Request(ctx context.Context, method, rawURL string, headers http.Header, rangeHeader string) (*http.Response, error) {

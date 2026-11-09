@@ -42,7 +42,7 @@ type fileServer struct {
 	noHEAD          bool // HEAD answers 405
 	noRange         bool // Range ignored, always 200
 	probeRangeOnly  bool // only bytes=0-0 honoured; other ranges get 200
-	badContentRange bool // non-probe 206 responses carry a wrong Content-Range
+	badContentRange bool // 206 responses after the first carry a wrong Content-Range
 	unknownLength   bool // chunked, no Content-Length, no ranges
 	reprDigest      string
 	contentType     string
@@ -178,7 +178,7 @@ func (fs *fileServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if partial {
 		cr := fmt.Sprintf("bytes %d-%d/%d", start, end, len(data))
-		if fs.badContentRange && !(start == 0 && end == 0) {
+		if fs.badContentRange && start > 0 {
 			cr = fmt.Sprintf("bytes %d-%d/%d", start+1, end, len(data))
 		}
 		h.Set("Content-Range", cr)

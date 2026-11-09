@@ -24,11 +24,15 @@ import (
 	"github.com/vaisah/internal/infrastructure/filesystem"
 	"github.com/vaisah/internal/infrastructure/network"
 	"github.com/vaisah/internal/platform"
+	"golang.org/x/time/rate"
 )
 
 // Prober discovers remote metadata. *network.Prober satisfies it.
 type Prober interface {
 	Probe(ctx context.Context, url string, headers http.Header) (domain.RemoteMetadata, error)
+	// Open sends a download's first request; the response body is the
+	// file from byte 0 (nil for an empty file).
+	Open(ctx context.Context, url string, headers http.Header) (domain.RemoteMetadata, *http.Response, error)
 }
 
 // Config tunes the engine. Zero values select defaults.
@@ -128,9 +132,31 @@ type Manager struct {
 	baseCancel context.CancelFunc
 	wg         sync.WaitGroup
 
-	mu       sync.Mutex
-	items    map[string]*entry
-	stopping bool
+	// limiter caps the combined speed of all downloads (unlimited by default).
+	limiter *rate.Limiter
+
+	mu         sync.Mutex
+	items      map[string]*entry
+	stopping   bool
+	hostLimits map[string]int // connections each server was seen to accept
+}
+
+// SetSpeedLimit caps the combined download speed in bytes per second;
+// 0 or less removes the limit. It applies at once to running downloads.
+func (m *Manager) SetSpeedLimit(bytesPerSecond int64) {
+	if bytesPerSecond <= 0 {
+		m.limiter.SetLimit(rate.Inf)
+		return
+	}
+	m.limiter.SetLimit(rate.Limit(bytesPerSecond))
+}
+
+// SpeedLimit returns the current limit in bytes per second (0 = none).
+func (m *Manager) SpeedLimit() int64 {
+	if l := m.limiter.Limit(); l != rate.Inf {
+		return int64(l)
+	}
+	return 0
 }
 
 // New creates a Manager. store is required.
@@ -144,7 +170,8 @@ func New(store domain.Store, cfg Config) (*Manager, error) {
 		policy = cfg.Retry.normalized()
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Manager{cfg: cfg, retry: policy, store: store, publisher: filesystem.NewPublisher(), baseCtx: ctx, baseCancel: cancel, items: map[string]*entry{}}, nil
+	return &Manager{cfg: cfg, retry: policy, store: store, publisher: filesystem.NewPublisher(), baseCtx: ctx, baseCancel: cancel,
+		items: map[string]*entry{}, hostLimits: map[string]int{}, limiter: rate.NewLimiter(rate.Inf, readBufferSize)}, nil
 }
 
 // managedHeaders are controlled by the engine and may not be overridden.

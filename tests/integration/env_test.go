@@ -74,7 +74,7 @@ func newEnv(t *testing.T, tweak func(*engine.Config)) *env {
 	e := &env{t: t, dir: filepath.Join(t.TempDir(), "downloads"), dbPath: filepath.Join(t.TempDir(), "state.db"), events: &recorder{}}
 	e.client = network.NewClient(network.Options{AllowPrivate: true})
 	e.cfg = engine.Config{
-		Connections: 4, MinSegmentSize: 1, Retry: fastRetry(4), Client: e.client, Publisher: e.events,
+		Connections: 4, MinSegmentSize: 16 << 10, Retry: fastRetry(4), Client: e.client, Publisher: e.events,
 		ProgressInterval: 20 * time.Millisecond, PersistInterval: 50 * time.Millisecond, ReadIdleTimeout: 5 * time.Second,
 	}
 	if tweak != nil {

@@ -116,3 +116,11 @@ The Wails shell (`main.go`, `app.go`, `frontend/`) compiles against the engine b
 ```sh
 docker build -f build/linux/Dockerfile -t downwell-linux:0.1.0 .   # builds /out/downwell_0.1.0_amd64.deb
 ```
+
+## License
+
+Yellow Flash is free software, licensed under the GNU General Public License v3.0 or later
+([LICENSE](LICENSE)). Parts of its backend are being ported from
+[Mister Download Manager](https://github.com/anefzaoui/misterdownloadmanager) © 2026 Ahmed
+Nefzaoui and contributors (GPL-3.0-or-later); see [NOTICE.md](NOTICE.md) for credits and
+third-party licences.

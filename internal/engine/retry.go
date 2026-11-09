@@ -167,6 +167,11 @@ func (p RetryPolicy) ShouldRetry(attempt int, c Classification) bool {
 // Delay returns the wait before the next attempt. random must be in [0,1).
 // A server-provided Retry-After is a lower bound.
 func (p RetryPolicy) Delay(attempt int, c Classification, random float64) time.Duration {
+	// A dropped or stalled connection is usually a blip: retry it at once.
+	// Servers that answered with an error still get the full backoff.
+	if attempt == 0 && c.RetryAfter == 0 && (c.Kind == KindTimeout || c.Kind == KindConnectionReset || c.Kind == KindNetwork) {
+		return 0
+	}
 	d := float64(p.BaseDelay) * math.Pow(p.Multiplier, float64(attempt))
 	if d > float64(p.MaxDelay) || math.IsInf(d, 0) {
 		d = float64(p.MaxDelay)

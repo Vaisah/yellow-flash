@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -21,61 +22,95 @@ import (
 // readBufferSize bounds per-worker memory regardless of file size.
 const readBufferSize = 64 << 10
 
-// transferSegmented downloads all incomplete segments with a bounded pool
-// of workers writing at their own offsets. The first permanent failure
-// cancels the remaining workers. Progress is checkpointed periodically and
-// on every segment completion: the file is synced first, then the counts
-// that were observed before the sync are persisted, so recorded progress
-// never exceeds durable data.
-func (m *Manager) transferSegmented(ctx context.Context, e *entry, d *domain.Download, meta *domain.RemoteMetadata, headers http.Header) error {
+// errYielded means a worker gave its part back instead of retrying.
+var errYielded = errors.New("worker yielded its part")
+
+// opened is a response already in flight (a download's first request),
+// with the cancel function of the context it was made with.
+type opened struct {
+	res    *http.Response
+	cancel context.CancelCauseFunc
+}
+
+func (o *opened) close() {
+	if o != nil {
+		_ = o.res.Body.Close()
+		o.cancel(nil)
+	}
+}
+
+// adopt binds the response to the consuming worker's ctx: it was made under
+// the download's context, so without this a worker whose group is cancelled
+// would keep reading it until the idle timeout. The returned func releases
+// the binding and closes the response.
+func (o *opened) adopt(ctx context.Context) func() {
+	stop := context.AfterFunc(ctx, func() { o.cancel(context.Cause(ctx)) })
+	return func() {
+		stop()
+		o.close()
+	}
+}
+
+// isThrottle reports a server signalling too many connections.
+func isThrottle(c Classification) bool {
+	return c.Kind == KindHTTP && (c.StatusCode == http.StatusTooManyRequests || c.StatusCode == http.StatusServiceUnavailable)
+}
+
+// transferSegmented downloads the file over several connections driven by
+// the planner: connection 0 continues the first request (when given) and
+// every other connection takes half of the largest remaining part, so no
+// connection idles while work remains. Progress is checkpointed
+// periodically and whenever a part completes: the file is synced first,
+// then the committed counts are persisted, so recorded progress never
+// exceeds durable data.
+func (m *Manager) transferSegmented(ctx context.Context, e *entry, d *domain.Download, meta *domain.RemoteMetadata, headers http.Header, first *opened) error {
 	f, err := filesystem.OpenTemp(d.TempPath)
 	if err != nil {
+		first.close()
 		return fmt.Errorf("open temporary file: %w", err)
 	}
 	defer f.Close()
 	info, err := f.Stat()
 	if err != nil {
+		first.close()
 		return err
 	}
 	stored, err := m.store.ListSegments(ctx, d.ID)
 	if err != nil {
+		first.close()
 		return err
 	}
-	segs, reused, err := planSegments(d.ID, meta.Size, d.Connections, m.cfg.MinSegmentSize, stored, info.Size())
+	// A fresh download starts as a single part; connections split it.
+	segs, reused, err := planSegments(d.ID, meta.Size, 1, m.cfg.MinSegmentSize, stored, info.Size())
 	if err != nil {
+		first.close()
 		return err
 	}
 	if !reused && len(stored) > 0 {
 		if err = m.store.DeleteSegments(ctx, d.ID); err != nil {
+			first.close()
 			return err
 		}
 	}
 	if err = filesystem.Preallocate(f, meta.Size); err != nil {
+		first.close()
 		return fmt.Errorf("preallocate: %w", err)
 	}
-	if err = m.store.SaveSegments(ctx, d.ID, segs); err != nil {
+	pl := newPlanner(segs, m.cfg.MinSegmentSize)
+	if err = m.store.SaveSegments(ctx, d.ID, pl.snapshot(d.ID)); err != nil {
+		first.close()
 		return err
 	}
-	states := newSegmentStates(segs)
-	var base int64
-	var pending []*segmentState
-	for _, st := range states {
-		base += st.done.Load()
-		if !st.complete() {
-			pending = append(pending, st)
-		}
-	}
-	tr := newTracker(meta.Size, base, time.Now())
+	tr := newTracker(meta.Size, pl.written(), time.Now())
 	m.setTracker(e, tr)
 	defer m.setTracker(e, nil)
 
 	persistCtx := context.WithoutCancel(ctx)
 	checkpoint := func() error {
-		snaps := make([]domain.Segment, len(states))
+		snaps := pl.snapshot(d.ID)
 		var sum int64
-		for i, st := range states {
-			snaps[i] = st.snapshot()
-			sum += snaps[i].Downloaded
+		for _, s := range snaps {
+			sum += s.Downloaded
 		}
 		if err := f.Sync(); err != nil {
 			return fmt.Errorf("sync: %w", err)
@@ -90,11 +125,21 @@ func (m *Manager) transferSegmented(ctx context.Context, e *entry, d *domain.Dow
 	defer cancelW(nil)
 	mon := m.startMonitor(e, tr, checkpoint, func(err error) { cancelW(err) })
 	g, gctx := errgroup.WithContext(wctx)
-	queue := &segmentQueue{items: pending}
-	workers := min(d.Connections, m.cfg.MaxConnections, len(pending))
+
+	workers := m.connectionsFor(meta.URL, min(d.Connections, m.cfg.MaxConnections))
 	var alive atomic.Int32
 	alive.Store(int32(workers))
-	for i := 0; i < workers; i++ {
+	firstPart := pl.next(0)
+	if firstPart == nil || firstPart.cursor != 0 {
+		first.close() // only usable for a part that starts at byte 0
+		first = nil
+	}
+	for id := 0; id < workers; id++ {
+		var pt *part
+		var op *opened
+		if id == 0 {
+			pt, op = firstPart, first
+		}
 		g.Go(func() error {
 			yielded := false
 			defer func() {
@@ -102,9 +147,9 @@ func (m *Manager) transferSegmented(ctx context.Context, e *entry, d *domain.Dow
 					alive.Add(-1)
 				}
 			}()
-			// A throttled worker steps aside while others are still running,
-			// so concurrency settles at whatever the server allows. The last
-			// worker never yields; for it throttling is a real error.
+			// A throttled connection steps aside while others still run, so
+			// concurrency settles at what the server allows; the last one
+			// never yields, for it throttling is a real error.
 			yield := func(c Classification) bool {
 				if !isThrottle(c) {
 					return false
@@ -122,20 +167,24 @@ func (m *Manager) transferSegmented(ctx context.Context, e *entry, d *domain.Dow
 			}
 			buf := make([]byte, readBufferSize)
 			for {
-				st := queue.pop()
-				if st == nil {
-					return nil
+				if pt == nil {
+					if pt = pl.next(id); pt == nil {
+						return nil
+					}
 				}
-				err := m.fetchSegment(gctx, e, f, st, meta, headers, tr, buf, yield)
+				err := m.fetchPart(gctx, e, f, pl, pt, meta, headers, tr, buf, yield, op)
+				op = nil
 				if errors.Is(err, errYielded) {
-					queue.pushFront(st)
+					pl.release(pt)
+					m.learnHostLimit(meta.URL, int(alive.Load()))
 					m.cfg.Logger.Info("server is limiting connections; continuing with fewer", "id", d.ID, "connections", alive.Load())
 					return nil
 				}
 				if err != nil {
-					return fmt.Errorf("segment %d: %w", st.seg.Index, err)
+					return fmt.Errorf("part at byte %d: %w", pt.start, err)
 				}
 				mon.notify()
+				pt = nil
 			}
 		})
 	}
@@ -153,121 +202,111 @@ func (m *Manager) transferSegmented(ctx context.Context, e *entry, d *domain.Dow
 	case ckErr != nil:
 		return ckErr
 	}
-	for _, st := range states {
-		if !st.complete() {
-			return fmt.Errorf("segment %d incomplete", st.seg.Index)
-		}
+	if !pl.finished() {
+		return errors.New("download stopped with parts unfinished")
 	}
 	return nil
 }
 
-// errYielded means a worker gave its segment back instead of retrying.
-var errYielded = errors.New("worker yielded segment")
-
-// isThrottle reports a server signalling too many connections.
-func isThrottle(c Classification) bool {
-	return c.Kind == KindHTTP && (c.StatusCode == http.StatusTooManyRequests || c.StatusCode == http.StatusServiceUnavailable)
-}
-
-// segmentQueue hands out pending segments; yielded ones go back in front.
-type segmentQueue struct {
-	mu    sync.Mutex
-	items []*segmentState
-}
-
-func (q *segmentQueue) pop() *segmentState {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	if len(q.items) == 0 {
-		return nil
-	}
-	st := q.items[0]
-	q.items = q.items[1:]
-	return st
-}
-
-func (q *segmentQueue) pushFront(st *segmentState) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	q.items = append([]*segmentState{st}, q.items...)
-}
-
-func (m *Manager) fetchSegment(ctx context.Context, e *entry, f *os.File, st *segmentState, meta *domain.RemoteMetadata, headers http.Header, tr *tracker, buf []byte, yield func(Classification) bool) error {
-	return m.withRetryYield(ctx, e, func() { st.retries.Add(1) }, yield, func() (bool, error) {
-		before := st.done.Load()
-		err := m.fetchRange(ctx, f, st, meta, headers, tr, buf)
-		return st.done.Load() > before, err
+func (m *Manager) fetchPart(ctx context.Context, e *entry, f *os.File, pl *planner, pt *part, meta *domain.RemoteMetadata, headers http.Header, tr *tracker, buf []byte, yield func(Classification) bool, op *opened) error {
+	return m.withRetryYield(ctx, e, func() { pl.retried(pt) }, yield, func() (bool, error) {
+		before, _ := pl.span(pt)
+		err := m.fetchPartOnce(ctx, f, pl, pt, meta, headers, tr, buf, op)
+		op = nil
+		after, _ := pl.span(pt)
+		return after > before, err
 	})
 }
 
-// fetchRange requests the rest of one segment and writes it at its offset.
-func (m *Manager) fetchRange(ctx context.Context, f *os.File, st *segmentState, meta *domain.RemoteMetadata, headers http.Header, tr *tracker, buf []byte) error {
-	start, end := st.next(), st.seg.End
-	if start > end {
+// fetchPartOnce streams the rest of pt into the file. It stops as soon as
+// pt is complete, including when another connection split pt's tail off.
+func (m *Manager) fetchPartOnce(ctx context.Context, f *os.File, pl *planner, pt *part, meta *domain.RemoteMetadata, headers http.Header, tr *tracker, buf []byte, op *opened) error {
+	from, end := pl.span(pt)
+	if from >= end {
+		op.close()
 		return nil
-	}
-	reqCtx, cancelReq := context.WithCancelCause(ctx)
-	defer cancelReq(nil)
-	req, err := network.NewRequest(reqCtx, http.MethodGet, meta.URL, headers, network.RangeHeader(start, end))
-	if err != nil {
-		return err
-	}
-	validator := ifRangeValidator(meta.ETag, meta.LastModified)
-	if validator != "" {
-		req.Header.Set("If-Range", validator)
 	}
 	tr.active.Add(1)
 	defer tr.active.Add(-1)
-	res, err := m.cfg.Client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer res.Body.Close()
-	switch res.StatusCode {
-	case http.StatusPartialContent:
-		cr, err := network.ParseContentRange(res.Header.Get("Content-Range"))
+	var res *http.Response
+	var onIdle func()
+	if op != nil {
+		defer op.adopt(ctx)()
+		res, onIdle = op.res, func() { op.cancel(errIdleTimeout) }
+	} else {
+		reqCtx, cancelReq := context.WithCancelCause(ctx)
+		defer cancelReq(nil)
+		onIdle = func() { cancelReq(errIdleTimeout) }
+		req, err := network.NewRequest(reqCtx, http.MethodGet, meta.URL, headers, network.RangeHeader(from, end-1))
 		if err != nil {
 			return err
 		}
-		if cr.Total >= 0 && cr.Total != meta.Size {
-			return fmt.Errorf("%w: size is now %d", domain.ErrRemoteChanged, cr.Total)
+		if v := ifRangeValidator(meta.ETag, meta.LastModified); v != "" {
+			req.Header.Set("If-Range", v)
 		}
-		if cr.Start != start || cr.End != end {
-			return fmt.Errorf("%w: got bytes %d-%d, requested %d-%d", errContentRangeMismatch, cr.Start, cr.End, start, end)
+		if res, err = m.cfg.Client.Do(req); err != nil {
+			return err
 		}
-	case http.StatusOK:
-		if changedValidators(res.Header, meta) {
-			return fmt.Errorf("%w: full response with new validators", domain.ErrRemoteChanged)
+		defer res.Body.Close()
+		switch res.StatusCode {
+		case http.StatusPartialContent:
+			cr, err := network.ParseContentRange(res.Header.Get("Content-Range"))
+			if err != nil {
+				return err
+			}
+			if cr.Total >= 0 && cr.Total != meta.Size {
+				return fmt.Errorf("%w: size is now %d", domain.ErrRemoteChanged, cr.Total)
+			}
+			if cr.Start != from || cr.End != end-1 {
+				return fmt.Errorf("%w: got bytes %d-%d, requested %d-%d", errContentRangeMismatch, cr.Start, cr.End, from, end-1)
+			}
+		case http.StatusOK:
+			if changedValidators(res.Header, meta) {
+				return fmt.Errorf("%w: full response with new validators", domain.ErrRemoteChanged)
+			}
+			return errRangeIgnored
+		default:
+			return network.NewStatusError(res)
 		}
-		return errRangeIgnored
-	default:
-		return network.NewStatusError(res)
 	}
-	body := newIdleReader(res.Body, m.cfg.ReadIdleTimeout, func() { cancelReq(errIdleTimeout) })
+	body := newIdleReader(res.Body, m.cfg.ReadIdleTimeout, onIdle)
 	defer body.stop()
-	w := &rangeWriter{w: f, off: start, end: end}
-	for remaining := end - start + 1; remaining > 0; {
-		n, rerr := body.Read(buf[:min(int64(len(buf)), remaining)])
+	pos := from
+	for {
+		n, rerr := body.Read(buf)
 		if n > 0 {
-			wn, werr := w.Write(buf[:n])
-			st.done.Add(int64(wn))
-			tr.add(int64(wn))
-			remaining -= int64(wn)
-			if werr != nil {
-				return fmt.Errorf("write: %w", werr)
+			if err := m.throttle(ctx, n); err != nil {
+				return err
+			}
+			allowed := pl.claim(pt, int64(n))
+			if allowed > 0 {
+				if _, werr := f.WriteAt(buf[:allowed], pos); werr != nil {
+					pl.abandon(pt)
+					return fmt.Errorf("write: %w", werr)
+				}
+				pl.commit(pt, allowed)
+				pos += allowed
+				tr.add(allowed)
+			}
+			if allowed < int64(n) {
+				return nil // part complete or split: this response is no longer needed
 			}
 		}
 		if rerr != nil {
 			if errors.Is(rerr, io.EOF) {
-				if remaining > 0 {
+				if !pl.done(pt) {
 					return io.ErrUnexpectedEOF
 				}
 				return nil
 			}
-			return bodyError(reqCtx, rerr)
+			return body.err(rerr)
+		}
+		if pl.done(pt) {
+			// Read the end of the body so the connection can be reused.
+			_, _ = body.Read(buf[:1])
+			return nil
 		}
 	}
-	return nil
 }
 
 func changedValidators(h http.Header, meta *domain.RemoteMetadata) bool {
@@ -278,25 +317,69 @@ func changedValidators(h http.Header, meta *domain.RemoteMetadata) bool {
 	return lm != "" && meta.LastModified != "" && lm != meta.LastModified
 }
 
+// connectionsFor caps want at the limit learned for the URL's server.
+func (m *Manager) connectionsFor(rawURL string, want int) int {
+	host := hostOf(rawURL)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if limit, ok := m.hostLimits[host]; ok && limit < want {
+		return max(1, limit)
+	}
+	return max(1, want)
+}
+
+// learnHostLimit remembers that a server accepts no more than n connections.
+func (m *Manager) learnHostLimit(rawURL string, n int) {
+	host := hostOf(rawURL)
+	if host == "" || n < 1 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if old, ok := m.hostLimits[host]; !ok || n < old {
+		m.hostLimits[host] = n
+	}
+}
+
+func hostOf(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	return u.Host
+}
+
+// throttle waits for the global speed limiter.
+func (m *Manager) throttle(ctx context.Context, n int) error {
+	return m.limiter.WaitN(ctx, n)
+}
+
 // transferStream downloads with one connection. It resumes with an open
 // range only when the server proved range support; otherwise every retry
 // restarts from zero. Restarts and checkpoints are serialised so a crash
 // can never leave a persisted offset pointing at unsynced data.
-func (m *Manager) transferStream(ctx context.Context, e *entry, d *domain.Download, meta *domain.RemoteMetadata, headers http.Header) error {
+func (m *Manager) transferStream(ctx context.Context, e *entry, d *domain.Download, meta *domain.RemoteMetadata, headers http.Header, first *opened) error {
 	f, err := filesystem.OpenTemp(d.TempPath)
 	if err != nil {
+		first.close()
 		return fmt.Errorf("open temporary file: %w", err)
 	}
 	defer f.Close()
 	info, err := f.Stat()
 	if err != nil {
+		first.close()
 		return err
 	}
 	var offset int64
 	if meta.RangeSupported {
 		offset = durableOffset(d.Downloaded, info.Size(), meta.Size)
 	}
+	if offset != 0 {
+		first.close() // the first request reads from byte 0
+		first = nil
+	}
 	if err = f.Truncate(offset); err != nil {
+		first.close()
 		return err
 	}
 	tr := newTracker(meta.Size, offset, time.Now())
@@ -336,7 +419,8 @@ func (m *Manager) transferStream(ctx context.Context, e *entry, d *domain.Downlo
 	buf := make([]byte, readBufferSize)
 	err = m.withRetry(wctx, e, nil, func() (bool, error) {
 		before := tr.bytes()
-		err := m.fetchStream(wctx, f, meta, headers, tr, buf, restart)
+		err := m.fetchStream(wctx, f, meta, headers, tr, buf, restart, first)
+		first = nil
 		return tr.bytes() > before, err
 	})
 	mon.close()
@@ -353,41 +437,52 @@ func (m *Manager) transferStream(ctx context.Context, e *entry, d *domain.Downlo
 	return ckErr
 }
 
-// fetchStream performs one single-connection request from the current
-// offset. meta is updated when the server reveals a new length.
-func (m *Manager) fetchStream(ctx context.Context, f *os.File, meta *domain.RemoteMetadata, headers http.Header, tr *tracker, buf []byte, restart func(func(*domain.Download)) error) error {
+// fetchStream performs one single-connection transfer from the current
+// offset, continuing op (the first request) when given. meta is updated
+// when the server reveals a new length.
+func (m *Manager) fetchStream(ctx context.Context, f *os.File, meta *domain.RemoteMetadata, headers http.Header, tr *tracker, buf []byte, restart func(func(*domain.Download)) error, op *opened) error {
 	offset := tr.bytes()
 	if offset > 0 && !meta.RangeSupported {
 		if err := restart(nil); err != nil {
+			op.close()
 			return err
 		}
 		offset = 0
 	}
 	if meta.Size >= 0 && offset >= meta.Size {
+		op.close()
 		return nil
-	}
-	reqCtx, cancelReq := context.WithCancelCause(ctx)
-	defer cancelReq(nil)
-	rangeHeader := ""
-	if offset > 0 {
-		rangeHeader = network.RangeHeader(offset, -1)
-	}
-	req, err := network.NewRequest(reqCtx, http.MethodGet, meta.URL, headers, rangeHeader)
-	if err != nil {
-		return err
-	}
-	if offset > 0 {
-		if v := ifRangeValidator(meta.ETag, meta.LastModified); v != "" {
-			req.Header.Set("If-Range", v)
-		}
 	}
 	tr.active.Add(1)
 	defer tr.active.Add(-1)
-	res, err := m.cfg.Client.Do(req)
-	if err != nil {
-		return err
+	var res *http.Response
+	var onIdle func()
+	if op != nil && offset == 0 {
+		defer op.adopt(ctx)()
+		res, onIdle = op.res, func() { op.cancel(errIdleTimeout) }
+	} else {
+		op.close()
+		reqCtx, cancelReq := context.WithCancelCause(ctx)
+		defer cancelReq(nil)
+		onIdle = func() { cancelReq(errIdleTimeout) }
+		rangeHeader := ""
+		if offset > 0 {
+			rangeHeader = network.RangeHeader(offset, -1)
+		}
+		req, err := network.NewRequest(reqCtx, http.MethodGet, meta.URL, headers, rangeHeader)
+		if err != nil {
+			return err
+		}
+		if offset > 0 {
+			if v := ifRangeValidator(meta.ETag, meta.LastModified); v != "" {
+				req.Header.Set("If-Range", v)
+			}
+		}
+		if res, err = m.cfg.Client.Do(req); err != nil {
+			return err
+		}
+		defer res.Body.Close()
 	}
-	defer res.Body.Close()
 	switch res.StatusCode {
 	case http.StatusOK:
 		switch {
@@ -434,7 +529,7 @@ func (m *Manager) fetchStream(ctx context.Context, f *os.File, meta *domain.Remo
 	default:
 		return network.NewStatusError(res)
 	}
-	body := newIdleReader(res.Body, m.cfg.ReadIdleTimeout, func() { cancelReq(errIdleTimeout) })
+	body := newIdleReader(res.Body, m.cfg.ReadIdleTimeout, onIdle)
 	defer body.stop()
 	limit := int64(-1)
 	if meta.Size >= 0 {
@@ -447,6 +542,9 @@ func (m *Manager) fetchStream(ctx context.Context, f *os.File, meta *domain.Remo
 		}
 		n, rerr := body.Read(buf[:want])
 		if n > 0 {
+			if err := m.throttle(ctx, n); err != nil {
+				return err
+			}
 			if _, werr := f.WriteAt(buf[:n], off); werr != nil {
 				return fmt.Errorf("write: %w", werr)
 			}
@@ -463,7 +561,7 @@ func (m *Manager) fetchStream(ctx context.Context, f *os.File, meta *domain.Remo
 				}
 				return nil
 			}
-			return bodyError(reqCtx, rerr)
+			return body.err(rerr)
 		}
 	}
 	return nil
@@ -517,15 +615,21 @@ func (mon *monitor) close() {
 	<-mon.done
 }
 
-// idleReader cancels the request when no data arrives for timeout.
+// idleReader aborts a response when no data arrives for timeout.
 type idleReader struct {
 	r       io.Reader
 	timer   *time.Timer
 	timeout time.Duration
+	fired   atomic.Bool
 }
 
 func newIdleReader(r io.Reader, timeout time.Duration, onIdle func()) *idleReader {
-	return &idleReader{r: r, timeout: timeout, timer: time.AfterFunc(timeout, onIdle)}
+	ir := &idleReader{r: r, timeout: timeout}
+	ir.timer = time.AfterFunc(timeout, func() {
+		ir.fired.Store(true)
+		onIdle()
+	})
+	return ir
 }
 
 func (i *idleReader) Read(p []byte) (int, error) {
@@ -538,9 +642,9 @@ func (i *idleReader) Read(p []byte) (int, error) {
 
 func (i *idleReader) stop() { i.timer.Stop() }
 
-// bodyError surfaces idle timeouts that were reported as cancellations.
-func bodyError(reqCtx context.Context, err error) error {
-	if errors.Is(context.Cause(reqCtx), errIdleTimeout) {
+// err reports an idle timeout instead of the cancellation it caused.
+func (i *idleReader) err(err error) error {
+	if i.fired.Load() {
 		return errIdleTimeout
 	}
 	return err

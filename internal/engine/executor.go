@@ -111,7 +111,19 @@ func (m *Manager) execute(ctx context.Context, e *entry) error {
 }
 
 func (m *Manager) attempt(ctx context.Context, e *entry, headers http.Header, forceSingle bool) error {
-	meta, err := m.probe(ctx, e, headers)
+	// A fresh download's first request doubles as the probe and starts the
+	// transfer; a resumed one is probed first so its validators are checked
+	// before any byte is appended to existing data.
+	var (
+		meta  domain.RemoteMetadata
+		first *opened
+		err   error
+	)
+	if m.isFresh(e) {
+		meta, first, err = m.open(ctx, e, headers)
+	} else {
+		meta, err = m.probe(ctx, e, headers)
+	}
 	if err != nil {
 		return err
 	}
@@ -120,12 +132,13 @@ func (m *Manager) attempt(ctx context.Context, e *entry, headers http.Header, fo
 	}
 	d, err := m.applyMetadata(ctx, e, meta)
 	if err != nil {
+		first.close()
 		return err
 	}
 	if meta.RangeSupported && meta.Size > 0 {
-		err = m.transferSegmented(ctx, e, d, &meta, headers)
+		err = m.transferSegmented(ctx, e, d, &meta, headers, first)
 	} else {
-		err = m.transferStream(ctx, e, d, &meta, headers)
+		err = m.transferStream(ctx, e, d, &meta, headers, first)
 	}
 	if err != nil {
 		return err
@@ -147,6 +160,44 @@ func (m *Manager) probe(ctx context.Context, e *entry, headers http.Header) (dom
 		return meta, fmt.Errorf("metadata: %w", err)
 	}
 	return meta, nil
+}
+
+// isFresh reports whether nothing has been downloaded yet.
+func (m *Manager) isFresh(e *entry) bool {
+	m.mu.Lock()
+	downloaded, temp := e.d.Downloaded, e.d.TempPath
+	m.mu.Unlock()
+	return downloaded == 0 && !exists(temp)
+}
+
+// open sends the first request (with retries) and keeps its response open
+// for the transfer. The response is bound to its own context so an idle
+// timeout can abort it.
+func (m *Manager) open(ctx context.Context, e *entry, headers http.Header) (domain.RemoteMetadata, *opened, error) {
+	m.mu.Lock()
+	rawURL := e.d.URL
+	m.mu.Unlock()
+	var meta domain.RemoteMetadata
+	var op *opened
+	err := m.withRetry(ctx, e, nil, func() (bool, error) {
+		octx, cancel := context.WithCancelCause(ctx)
+		md, res, err := m.cfg.Prober.Open(octx, rawURL, headers)
+		if err != nil {
+			cancel(nil)
+			return false, err
+		}
+		meta = md
+		if res != nil {
+			op = &opened{res: res, cancel: cancel}
+		} else {
+			cancel(nil)
+		}
+		return false, nil
+	})
+	if err != nil {
+		return meta, nil, fmt.Errorf("metadata: %w", err)
+	}
+	return meta, op, nil
 }
 
 // applyMetadata revalidates the representation, resets progress if it
