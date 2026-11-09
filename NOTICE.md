@@ -24,6 +24,10 @@ planner, the first-request download), is original to Yellow Flash.
 
 | Module | Licence | Used for | Since |
 |---|---|---|---|
+| `github.com/dop251/goja` | MIT | JavaScript engine for proxy auto-config scripts (`network/pac.go`); pinned to commit a8d1dbc7 (2026-10-25) | port step 2b (`pac`) |
+| `github.com/dlclark/regexp2/v2` | MIT | Required by goja | port step 2b (`pac`) |
+| `github.com/go-sourcemap/sourcemap` | BSD-2-Clause | Required by goja | port step 2b (`pac`) |
+| `github.com/google/pprof` | Apache-2.0 | Required by goja | port step 2b (`pac`) |
 | `golang.org/x/net` | BSD-3-Clause | `dns/dnsmessage`, in the DNS tests' fake servers only; it was already an indirect dependency via Wails | port step 2b (`network/dns.go`) |
 | `golang.org/x/sys` | BSD-3-Clause | Windows file lock and foreground permission (`internal/platform/lock_windows.go`); it was already an indirect dependency via Wails | port step 1 (`internal/ipc`) |
 

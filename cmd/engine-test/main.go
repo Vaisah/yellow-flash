@@ -29,8 +29,8 @@ import (
 	"github.com/vaisah/internal/application/events"
 	domain "github.com/vaisah/internal/domain/download"
 	"github.com/vaisah/internal/engine"
-	"github.com/vaisah/internal/infrastructure/persistence/memory"
 	"github.com/vaisah/internal/infrastructure/persistence/jsonstore"
+	"github.com/vaisah/internal/infrastructure/persistence/memory"
 )
 
 type headerFlags map[string]string
