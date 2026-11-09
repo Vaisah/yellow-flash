@@ -84,6 +84,8 @@ button:disabled {
 
 .app {
   height: 100vh;
+  min-width: 860px;
+  min-height: 540px;
   display: grid;
   grid-template-rows: auto 1fr auto;
   background: var(--bg-window);
@@ -128,6 +130,14 @@ button:disabled {
   justify-content: space-between;
   padding: 0 20px 0 24px;
   border-bottom: 1px solid var(--border-subtle);
+  --wails-draggable: drag;
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+.brand, .window-controls, .win-btn {
+  --wails-draggable: no-drag;
+  -webkit-app-region: no-drag;
 }
 
 .brand {
@@ -2449,4 +2459,137 @@ button:disabled {
   font-size: 11px !important;
   color: var(--text-secondary) !important;
   word-break: break-all;
+}
+
+
+/* ==========================================================================
+   Responsive Desktop Layout & Breakpoints
+   Enforces clean presentation across desktop screen resolutions down to 860px x 540px
+   ========================================================================== */
+
+@media (max-width: 1100px) {
+  .body {
+    grid-template-columns: 195px 1fr;
+  }
+  .search-pill {
+    width: 210px;
+  }
+  .menulinks {
+    gap: 18px;
+  }
+  .tools {
+    gap: 14px;
+  }
+  .col-status {
+    width: 140px;
+  }
+  .status-progress-wrap {
+    width: 100px;
+  }
+  .col-mod {
+    width: 95px;
+  }
+}
+
+@media (max-width: 980px) {
+  .body {
+    grid-template-columns: 175px 1fr;
+  }
+  .search-pill {
+    width: 180px;
+  }
+  .menulinks {
+    gap: 12px;
+    font-size: 12px;
+  }
+  .tools {
+    gap: 10px;
+  }
+  .action-btn {
+    min-width: 46px;
+    padding: 5px 6px;
+  }
+  .action-label {
+    font-size: 10px;
+  }
+  .col-eta {
+    display: none;
+  }
+  .speed-test-label {
+    display: none;
+  }
+}
+
+@media (max-width: 880px) {
+  .body {
+    grid-template-columns: 160px 1fr;
+  }
+  .search-pill {
+    width: 160px;
+  }
+  .menulinks {
+    gap: 10px;
+    font-size: 11px;
+  }
+  .add-url-pill {
+    min-width: 120px;
+    height: 38px;
+    padding: 0 4px 0 12px;
+  }
+  .add-url-text {
+    font-size: 12px;
+  }
+  .add-url-icon-badge {
+    width: 28px;
+    height: 28px;
+  }
+  .col-mod {
+    display: none;
+  }
+}
+
+/* Height-constrained vertical responsiveness (e.g. 540px - 650px) */
+@media (max-height: 680px) {
+  .toolbar {
+    height: 60px;
+  }
+  .action-btn {
+    padding: 3px 6px;
+  }
+  .action-icon {
+    height: 18px;
+  }
+  .action-label {
+    font-size: 10px;
+  }
+  .disk-card {
+    padding: 10px;
+    gap: 4px;
+  }
+  .disk-gauge-wrap {
+    width: 110px;
+  }
+  .disk-gauge-svg {
+    width: 110px;
+    height: 60px;
+  }
+  .disk-gauge-emoji {
+    bottom: 18px;
+    font-size: 16px;
+  }
+  .disk-percent {
+    font-size: 16px;
+  }
+  .disk-cleaner-btn {
+    height: 30px;
+    font-size: 11px;
+    margin-top: 4px;
+  }
+  .details {
+    max-height: 32%;
+    padding: 10px 16px;
+  }
+  .app-footer {
+    height: 36px;
+  }
 }

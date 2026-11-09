@@ -98,12 +98,29 @@ export function Toolbar(p: ToolbarProps) {
           <img src={logo} alt="Yellow Flash" width={22} height={22} className="brand-logo" />
           <span className="brand-title">Yellow Flash</span>
         </div>
-        {/* //TODO: implement window controls for windows and linux*/}
-        {/* <div className="window-controls" aria-label="Window controls">
-          <span className="win-btn win-btn-yellow" title="Minimize" />
-          <span className="win-btn win-btn-peach" title="Maximize" />
-          <span className="win-btn win-btn-green" title="Close" />
-        </div> */}
+        <div className="window-controls" aria-label="Window controls">
+          <button
+            type="button"
+            className="win-btn win-btn-yellow"
+            title="Minimize"
+            onClick={() => window.runtime?.WindowMinimise?.()}
+            aria-label="Minimize Window"
+          />
+          <button
+            type="button"
+            className="win-btn win-btn-peach"
+            title="Maximize / Restore"
+            onClick={() => window.runtime?.WindowToggleMaximise?.()}
+            aria-label="Maximize / Restore Window"
+          />
+          <button
+            type="button"
+            className="win-btn win-btn-green"
+            title="Close"
+            onClick={() => window.runtime?.Quit?.()}
+            aria-label="Close Window"
+          />
+        </div>
       </div>
 
       {/* 2. Menu row with Search */}

@@ -30,6 +30,11 @@ declare global {
     runtime?: {
       EventsOn(event: string, callback: (...data: any[]) => void): () => void
       ClipboardSetText?(text: string): Promise<boolean>
+      WindowMinimise?(): void
+      WindowToggleMaximise?(): void
+      WindowSetMinSize?(width: number, height: number): void
+      WindowSetSize?(width: number, height: number): void
+      Quit?(): void
     }
   }
 }

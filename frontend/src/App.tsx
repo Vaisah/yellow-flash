@@ -94,6 +94,8 @@ export default function App() {
   }, [])
 
   useEffect(() => {
+    // Define minimum window size for desktop Wails app
+    window.runtime?.WindowSetMinSize?.(880, 560)
     backend().GetSettings().then(setSettings).catch((e) => toast('error', `Could not load settings: ${errorMessage(e)}`))
     backend().Info().then(setInfo).catch(() => undefined)
   }, [toast])
