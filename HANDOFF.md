@@ -136,7 +136,7 @@ Each item names where it plugs in. Follow the existing pattern: domain types fir
 **Still to do in Phase 3, in order:**
 
 1. **Single-instance lock: done (2026-11-09)**, by port step 1 (`internal/ipc`, see §9). We use our own lock rather than Wails' `SingleInstanceLock`, because it must be taken before the DB is opened and its channel also carries commands.
-2. **Maximum simultaneous downloads and a queue runner.** Add `internal/application/queue` (or extend `Service`). It holds QUEUED downloads and calls `Manager.Start` while `active < limit` (a setting, default 3), and listens to `DownloadChanged` events to start the next one.
+2. **Maximum simultaneous downloads and a queue runner: done (2026-11-09)**, by port step 2b (`application/queues`). The original plan follows for reference. Add `internal/application/queue` (or extend `Service`). It holds QUEUED downloads and calls `Manager.Start` while `active < limit` (a setting, default 3), and listens to `DownloadChanged` events to start the next one.
    - Use the `queues` list and `Download.QueueID`, both kept in `downloads.json`.
    - Keep the engine unaware of queues.
    - Test: 5 adds with limit 2 never exceed 2 active, and all 5 complete.
@@ -145,7 +145,7 @@ Each item names where it plugs in. Follow the existing pattern: domain types fir
    - Expose it to the engine through a small port, so the engine doesn't import the store.
 4. **Dynamic segment splitting: done** (see above). Possible follow-up: drop a connection that is far slower than the others and re-split its remainder.
 5. **Bandwidth limiting: engine done** (`Manager.SetSpeedLimit`). Still to do: a Settings or toolbar control, persisting the limit, and per-download limits.
-6. **Scheduler.** Start or stop a queue at set times. Live this in the queue runner; persist schedules in `queues` or a new `schedules` table.
+6. **Scheduler: done (2026-11-09)**, by port step 2b (`application/queues`); only the UI is missing. Start or stop a queue at set times. Live this in the queue runner; persist schedules in `queues` or a new `schedules` table.
 7. **Duplicate detection.** In `Service.Create`, find existing downloads with the same `URL`/`FinalURL` and ask the user (UI: "Already downloaded — open / download again").
 8. **Automatic retry of failed downloads.** A delayed re-`Retry` for transient failure kinds only. Store a structured error kind; see the tech debt list.
 9. **Download-complete notifications.** Add a `platform.Notifier` interface. Windows: toast (`git.sr.ht/~jackmordaunt/go-toast` is already an indirect dependency via Wails). Linux: D-Bus `org.freedesktop.Notifications`.
@@ -252,7 +252,7 @@ is at `C:\Users\Vaisah\Videos\Go\misterdownloadmanager-main`, version 0.5.1, GPL
 | # | MDM source | Go destination | Notes |
 |---|---|---|---|
 | 1 ✅ | `crates/ipc` (`lib.rs`, `api.rs`) | `internal/ipc`, `internal/platform/lock*.go`, `main.go`, `commands.go` | **Done 2026-11-09**; see "Step 1 notes" below. `browsers.rs`, `capture.rs` and `extension.rs` belong to the browser host and move to step 3. |
-| 2 ◐ | `crates/engine` remainder. **Done (2a):** `hosts.rs`, `limiter.rs`, `naming.rs`, `verify.rs`, `sparse.rs`, `disk.rs`. **To do (2b):** `sites/gdrive.rs`, `dns.rs`, `pac.rs`, `ftp.rs`, then queues and scheduler | `internal/engine`, `internal/infrastructure/network`, `internal/platform` | See "Step 2a notes". Compare with our existing planner, retry and first request; keep whichever is better tested. |
+| 2 ✅ | `crates/engine` remainder: `hosts.rs`, `limiter.rs`, `naming.rs`, `verify.rs`, `sparse.rs`, `disk.rs` (2a); `sites/gdrive.rs`, `dns.rs`, `pac.rs`, `ftp.rs`, queues and scheduler, plus JSON storage replacing SQLite (2b) | `internal/engine`, `internal/infrastructure/{network,persistence/jsonstore}`, `internal/platform`, `internal/application/queues`, `internal/domain/queue` | **Done 2026-11-09.** See "Step 2a notes" and "Step 2b notes". |
 | 3 | `crates/nmhost` + `extension/` | `cmd/nm-host`, `extension/` | Browser capture (Phase 4). The extension is JavaScript and can be ported nearly as is (GPL-3.0); change its IDs and name to Yellow Flash's own. |
 | 4 | `crates/tools` | `internal/tools` | yt-dlp and ffmpeg video, gallery-dl, run as separate programs, plus the adapter relay. |
 | 5 | `crates/torrent` | `internal/torrent` | Magnet links and .torrent files via anacrolix/torrent. |
