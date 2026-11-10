@@ -1,0 +1,239 @@
+{
+  "name": {
+    "message": "Yellow Flash"
+  },
+  "description": {
+    "message": "Perduoda atsisiuntimus iš naršyklės į „Yellow Flash“."
+  },
+  "menu": {
+    "message": "Atsisiųsti naudojant „Yellow Flash“"
+  },
+  "video_download": {
+    "message": "Atsisiųsti vaizdo įrašą"
+  },
+  "video_more": {
+    "message": "Daugiau parinkčių"
+  },
+  "video_hide_here": {
+    "message": "Slėpti šiame vaizdo įraše"
+  },
+  "video_never_site": {
+    "message": "Niekada $site$",
+    "placeholders": {
+      "site": {
+        "content": "$1",
+        "example": "example.com"
+      }
+    }
+  },
+  "video_settings": {
+    "message": "Mygtuko parametrai..."
+  },
+  "video_sent": {
+    "message": "Išsiųsta į Yellow Flash"
+  },
+  "video_failed": {
+    "message": "Yellow Flash neįdiegta arba nepasileido"
+  },
+  "video_drag": {
+    "message": "Vilkite, kad perkeltumėte jį palei vaizdo įrašo kraštą"
+  },
+  "menu_selected": {
+    "message": "Atsisiųsti pasirinktas nuorodas su Yellow Flash"
+  },
+  "menu_all": {
+    "message": "Atsisiųsti visas nuorodas su Yellow Flash"
+  },
+  "status_connected": {
+    "message": "Prijungta prie Yellow Flash"
+  },
+  "status_connected_version": {
+    "message": "Prijungta prie Yellow Flash $version$",
+    "placeholders": {
+      "version": {
+        "content": "$1",
+        "example": "0.2.5"
+      }
+    }
+  },
+  "status_paused": {
+    "message": "Pristabdyta: atsisiuntimai lieka naršyklėje"
+  },
+  "status_not_installed": {
+    "message": "Yellow Flash neįdiegta arba jos naršyklės integracija nenustatyta"
+  },
+  "status_forbidden": {
+    "message": "Yellow Flash nepriima šios plėtinio kopijos"
+  },
+  "status_not_running": {
+    "message": "Yellow Flash nepasileido laiku"
+  },
+  "status_host_failed": {
+    "message": "Ryšys su Yellow Flash nepavyko"
+  },
+  "status_too_large": {
+    "message": "Šio atsisiuntimo duomenys buvo per dideli, kad juos būtų galima perduoti"
+  },
+  "status_update_app": {
+    "message": "Atnaujinkite Yellow Flash, kad galėtumėte naudotis visomis šio plėtinio funkcijomis"
+  },
+  "popup_take": {
+    "message": "Perimti atsisiuntimus iš šios naršyklės"
+  },
+  "popup_proxy": {
+    "message": "Siųsti atsisiuntimus per šios naršyklės tarpinio serverio arba VPN plėtinį"
+  },
+  "popup_proxy_title": {
+    "message": "Tada „Yellow Flash“ atsisiunčia per tą patį tarpinį serverį, kurį naudoja ši naršyklė. Naršyklė vieną kartą paprašys jūsų tai leisti; išjungus šią parinktį, leidimas atšaukiamas."
+  },
+  "popup_proxy_title_chromium": {
+    "message": "Tada Yellow Flash atsisiunčia naudodama tą patį tarpinį serverį kaip ir ši naršyklė. Kai ši funkcija išjungta, plėtinys neskaito naršyklės tarpinio serverio."
+  },
+  "popup_exclude_site": {
+    "message": "Niekada nepaimti atsisiuntimų iš $site$",
+    "placeholders": {
+      "site": {
+        "content": "$1",
+        "example": "example.com"
+      }
+    }
+  },
+  "popup_excluded": {
+    "message": "Atsisiuntimai iš $site$ lieka naršyklėje",
+    "placeholders": {
+      "site": {
+        "content": "$1",
+        "example": "example.com"
+      }
+    }
+  },
+  "popup_open": {
+    "message": "Atidaryti Yellow Flash"
+  },
+  "popup_options": {
+    "message": "Parinktys..."
+  },
+  "popup_help": {
+    "message": "Žinynas"
+  },
+  "popup_fix": {
+    "message": "Kaip tai ištaisyti"
+  },
+  "popup_declined": {
+    "message": "Palikta naršyklei: $name$",
+    "placeholders": {
+      "name": {
+        "content": "$1",
+        "example": "setup.png"
+      }
+    }
+  },
+  "popup_declined_unnamed": {
+    "message": "Paskutinis atsisiuntimas buvo paliktas naršyklei."
+  },
+  "declined_file_type": {
+    "message": "Jo tipas nėra parinktyse „Failų tipai“."
+  },
+  "declined_site": {
+    "message": "Jo svetainė yra parinktyse „Failų tipai“, svetainės paliktos naršyklei."
+  },
+  "declined_address": {
+    "message": "Jo adresas yra parinktyse „Failų tipai“, adresai palikti naršyklei."
+  },
+  "declined_small": {
+    "message": "Failas mažesnis už minimalų dydį parinktyse „Failų tipai“."
+  },
+  "declined_browser": {
+    "message": "Ši naršyklė nepažymėta parinktyse „Bendra“."
+  },
+  "declined_integration_off": {
+    "message": "Parinktyse „Bendra“ išjungta „Naudoti išplėstinę naršyklės integraciją“."
+  },
+  "declined_site_access": {
+    "message": "Plėtiniui neleidžiama skaityti šios svetainės (naršyklės prieiga prie svetainės)."
+  },
+  "popup_alt": {
+    "message": "Laikykite nuspaudę Alt ir spustelėkite nuorodą, kad ją atsisiųstų naršyklė."
+  },
+  "popup_media": {
+    "message": "Medija šiame puslapyje"
+  },
+  "popup_media_none": {
+    "message": "Šiame puslapyje dar nerasta vaizdo ar garso. Paleiskite jį, tada atidarykite šį langą iš naujo."
+  },
+  "popup_media_streamed": {
+    "message": "Šio puslapio grotuvas srautu perduoda vaizdo įrašą dalimis, todėl nėra failo, kurį būtų galima parodyti. Užveskite ant vaizdo įrašo ir naudokite jo mygtuką „Atsisiųsti vaizdo įrašą“."
+  },
+  "popup_media_store": {
+    "message": "„Chrome“ internetinės parduotuvės taisyklės laiko šią priedo kopiją atokiau nuo šios svetainės vaizdo įrašų. Žinyne parašyta, ką galite padaryti."
+  },
+  "popup_media_download": {
+    "message": "Atsisiųsti"
+  },
+  "popup_media_protected": {
+    "message": "Apsaugota"
+  },
+  "popup_media_live": {
+    "message": "Tiesiogiai"
+  },
+  "video_off": {
+    "message": "Atsisiuntimo mygtukas šioje svetainėje išjungtas"
+  },
+  "video_drm": {
+    "message": "Apsaugotas vaizdo įrašas: jo negalima įrašyti"
+  },
+  "video_unnamed": {
+    "message": "Neaišku, kuris tai vaizdo įrašas: atidarykite jo paties puslapį ir bandykite ten"
+  },
+  "popup_send_to": {
+    "message": "Siųsti atsisiuntimus į"
+  },
+  "popup_send_here": {
+    "message": "Šis kompiuteris"
+  },
+  "popup_send_remote": {
+    "message": "Kitas „Yellow Flash“ (serveris)"
+  },
+  "popup_remote_code": {
+    "message": "Susiejimo kodas"
+  },
+  "popup_remote_open": {
+    "message": "Atidaryti"
+  },
+  "popup_remote_pair": {
+    "message": "Susieti"
+  },
+  "popup_remote_help": {
+    "message": "Atidarykite jo adresą vieną kartą ir priimkite jo sertifikatą, tada įveskite kodą iš „Parinktys“, „Nuotolinis“, „Susieti įrenginį“ (arba „yellowflash-cli pair“)."
+  },
+  "status_remote": {
+    "message": "Atsisiuntimai siunčiami į $address$",
+    "placeholders": {
+      "address": {
+        "content": "$1",
+        "example": "https://192.168.1.10:8463/"
+      }
+    }
+  },
+  "remote_address": {
+    "message": "Įveskite jo https:// adresą."
+  },
+  "remote_unreachable": {
+    "message": "Nepasiekta. Atidarykite jo adresą vieną kartą šioje naršyklėje ir priimkite jo sertifikatą, tada bandykite dar kartą."
+  },
+  "remote_wrong_code": {
+    "message": "Neteisingas kodas."
+  },
+  "remote_no_code": {
+    "message": "Dabar nerodo kodo: pirmiausia spustelėkite „Susieti įrenginį“."
+  },
+  "remote_too_soon": {
+    "message": "Palaukite, tada bandykite dar kartą."
+  },
+  "remote_failed": {
+    "message": "Nepavyko. Bandykite dar kartą."
+  },
+  "remote_device_name": {
+    "message": "Naršyklės plėtinys"
+  }
+}

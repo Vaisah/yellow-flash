@@ -16,6 +16,20 @@ export function onProgress(cb: (p: Progress) => void): () => void {
   return window.runtime?.EventsOn('downloads:progress', cb) ?? (() => {})
 }
 
+/** A link handed over by a second launch (`/d URL [/f name] [/p dir]`): open Add URL with it. */
+export interface AddPrefill { url: string; filename: string; directory: string }
+
+export function onAddRequest(cb: (p: AddPrefill) => void): () => void {
+  return window.runtime?.EventsOn('app:add-url', cb) ?? (() => {})
+}
+
+/** A message from the backend to show as a toast (a silent add's result). */
+export interface Notice { kind: 'ok' | 'error' | 'info'; text: string }
+
+export function onNotice(cb: (n: Notice) => void): () => void {
+  return window.runtime?.EventsOn('app:notice', cb) ?? (() => {})
+}
+
 /** Wails rejects with plain strings; normalise to a message. */
 export function errorMessage(e: unknown): string {
   if (typeof e === 'string') return e

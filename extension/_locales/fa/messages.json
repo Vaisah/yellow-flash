@@ -1,0 +1,239 @@
+{
+  "name": {
+    "message": "Yellow Flash"
+  },
+  "description": {
+    "message": "دانلودها را از مرورگر به Yellow Flash منتقل می‌کند."
+  },
+  "menu": {
+    "message": "دانلود با Yellow Flash"
+  },
+  "video_download": {
+    "message": "دانلود ویدیو"
+  },
+  "video_more": {
+    "message": "گزینه‌های بیشتر"
+  },
+  "video_hide_here": {
+    "message": "پنهان کردن در این ویدیو"
+  },
+  "video_never_site": {
+    "message": "هرگز در $site$",
+    "placeholders": {
+      "site": {
+        "content": "$1",
+        "example": "example.com"
+      }
+    }
+  },
+  "video_settings": {
+    "message": "تنظیمات دکمه..."
+  },
+  "video_sent": {
+    "message": "به Yellow Flash ارسال شد"
+  },
+  "video_failed": {
+    "message": "Yellow Flash نصب نشده است یا اجرا نشد"
+  },
+  "video_drag": {
+    "message": "برای جابجایی در لبه ویدیو بکشید"
+  },
+  "menu_selected": {
+    "message": "پیوندهای انتخاب شده را با Yellow Flash بارگیری کن"
+  },
+  "menu_all": {
+    "message": "همه پیوندها را با Yellow Flash بارگیری کن"
+  },
+  "status_connected": {
+    "message": "به Yellow Flash متصل شد"
+  },
+  "status_connected_version": {
+    "message": "به Yellow Flash $version$ متصل شد",
+    "placeholders": {
+      "version": {
+        "content": "$1",
+        "example": "0.2.5"
+      }
+    }
+  },
+  "status_paused": {
+    "message": "متوقف شد: بارگیری‌ها در مرورگر می‌مانند"
+  },
+  "status_not_installed": {
+    "message": "Yellow Flash نصب نشده است یا یکپارچه‌سازی آن با مرورگر تنظیم نشده است"
+  },
+  "status_forbidden": {
+    "message": "Yellow Flash این نسخه از افزونه را نمی‌پذیرد"
+  },
+  "status_not_running": {
+    "message": "Yellow Flash به موقع شروع نشد"
+  },
+  "status_host_failed": {
+    "message": "اتصال به Yellow Flash برقرار نشد"
+  },
+  "status_too_large": {
+    "message": "جزئیات این بارگیری برای واگذاری بیش از حد بزرگ بود"
+  },
+  "status_update_app": {
+    "message": "Yellow Flash را به‌روزرسانی کنید تا از همه قابلیت‌های این افزونه استفاده کنید"
+  },
+  "popup_take": {
+    "message": "دریافت بارگیری‌ها از این مرورگر"
+  },
+  "popup_proxy": {
+    "message": "بارگیری‌ها از طریق پروکسی یا افزونه VPN این مرورگر ارسال شوند"
+  },
+  "popup_proxy_title": {
+    "message": "Yellow Flash سپس از طریق همان پروکسی این مرورگر بارگیری می‌کند. مرورگر یک‌بار از شما اجازه می‌گیرد؛ با خاموش کردن این گزینه، اجازه لغو می‌شود."
+  },
+  "popup_proxy_title_chromium": {
+    "message": "Yellow Flash از طریق همان پراکسی این مرورگر بارگیری می‌کند. وقتی این گزینه خاموش باشد، افزونه پراکسی مرورگر را نمی‌خواند."
+  },
+  "popup_exclude_site": {
+    "message": "هرگز بارگیری‌های $site$ را دریافت نکنید",
+    "placeholders": {
+      "site": {
+        "content": "$1",
+        "example": "example.com"
+      }
+    }
+  },
+  "popup_excluded": {
+    "message": "دانلودها از $site$ در مرورگر می‌مانند",
+    "placeholders": {
+      "site": {
+        "content": "$1",
+        "example": "example.com"
+      }
+    }
+  },
+  "popup_open": {
+    "message": "باز کردن Yellow Flash"
+  },
+  "popup_options": {
+    "message": "گزینه‌ها..."
+  },
+  "popup_help": {
+    "message": "راهنما"
+  },
+  "popup_fix": {
+    "message": "چگونه آن را رفع کنیم"
+  },
+  "popup_declined": {
+    "message": "واگذارشده به مرورگر: $name$",
+    "placeholders": {
+      "name": {
+        "content": "$1",
+        "example": "setup.png"
+      }
+    }
+  },
+  "popup_declined_unnamed": {
+    "message": "آخرین دانلود به مرورگر واگذار شد."
+  },
+  "declined_file_type": {
+    "message": "نوع آن در گزینه‌ها ← انواع فایل نیست."
+  },
+  "declined_site": {
+    "message": "سایت آن در گزینه‌ها ← انواع فایل، سایت‌های واگذارشده به مرورگر است."
+  },
+  "declined_address": {
+    "message": "آدرس آن در گزینه‌ها ← انواع فایل، آدرس‌های واگذارشده به مرورگر است."
+  },
+  "declined_small": {
+    "message": "اندازه‌اش از حداقل اندازه در گزینه‌ها ← انواع فایل کوچک‌تر است."
+  },
+  "declined_browser": {
+    "message": "این مرورگر در گزینه‌ها ← عمومی علامت نخورده است."
+  },
+  "declined_integration_off": {
+    "message": "«استفاده از یکپارچه‌سازی پیشرفته مرورگر» در گزینه‌ها ← عمومی خاموش است."
+  },
+  "declined_site_access": {
+    "message": "افزونه اجازه خواندن این سایت را ندارد (دسترسی سایت مرورگر)."
+  },
+  "popup_alt": {
+    "message": "هنگام کلیک روی پیوند، کلید Alt را نگه دارید تا مرورگر آن را بارگیری کند."
+  },
+  "popup_media": {
+    "message": "رسانه‌های این صفحه"
+  },
+  "popup_media_none": {
+    "message": "هنوز ویدیو یا صدایی در این صفحه پیدا نشده است. آن را پخش کنید و سپس این پنجره را دوباره باز کنید."
+  },
+  "popup_media_streamed": {
+    "message": "پخش‌کنندهٔ این صفحه ویدیو را تکه‌تکه پخش می‌کند، پس فایلی برای فهرست کردن نیست. نشانگر را روی ویدیو ببرید و از دکمهٔ «دانلود ویدیو» آن استفاده کنید."
+  },
+  "popup_media_store": {
+    "message": "قوانین Chrome Web Store این نسخه از افزونه را از ویدیوهای این سایت دور نگه می‌دارد. «راهنما» می‌گوید چه کاری می‌توانید بکنید."
+  },
+  "popup_media_download": {
+    "message": "دانلود"
+  },
+  "popup_media_protected": {
+    "message": "محافظت‌شده"
+  },
+  "popup_media_live": {
+    "message": "زنده"
+  },
+  "video_off": {
+    "message": "دکمه بارگیری در این سایت خاموش است"
+  },
+  "video_drm": {
+    "message": "ویدیوی محافظت‌شده: امکان ذخیره آن نیست"
+  },
+  "video_unnamed": {
+    "message": "مشخص نیست این کدام ویدیو است: صفحهٔ خود ویدیو را باز کنید و آنجا امتحان کنید"
+  },
+  "popup_send_to": {
+    "message": "ارسال دانلودها به"
+  },
+  "popup_send_here": {
+    "message": "این رایانه"
+  },
+  "popup_send_remote": {
+    "message": "یک Yellow Flash دیگر (یک سرور)"
+  },
+  "popup_remote_code": {
+    "message": "کد جفت‌سازی"
+  },
+  "popup_remote_open": {
+    "message": "باز کردن آن"
+  },
+  "popup_remote_pair": {
+    "message": "جفت کردن"
+  },
+  "popup_remote_help": {
+    "message": "یک بار آدرس آن را باز کنید و گواهی آن را بپذیرید، سپس کدی را از گزینه‌ها، از راه دور، جفت کردن دستگاه (یا yellowflash-cli pair) وارد کنید."
+  },
+  "status_remote": {
+    "message": "دانلودها به $address$ می‌روند",
+    "placeholders": {
+      "address": {
+        "content": "$1",
+        "example": "https://192.168.1.10:8463/"
+      }
+    }
+  },
+  "remote_address": {
+    "message": "آدرس https:// آن را وارد کنید."
+  },
+  "remote_unreachable": {
+    "message": "قابل دسترسی نیست. یک بار آدرس آن را در این مرورگر باز کنید و گواهی آن را بپذیرید، سپس دوباره امتحان کنید."
+  },
+  "remote_wrong_code": {
+    "message": "کد اشتباه است."
+  },
+  "remote_no_code": {
+    "message": "اکنون کدی نشان نمی‌دهد: ابتدا روی «جفت کردن دستگاه» در آنجا کلیک کنید."
+  },
+  "remote_too_soon": {
+    "message": "لحظه‌ای صبر کنید، سپس دوباره امتحان کنید."
+  },
+  "remote_failed": {
+    "message": "کار نکرد. دوباره امتحان کنید."
+  },
+  "remote_device_name": {
+    "message": "افزونه مرورگر"
+  }
+}

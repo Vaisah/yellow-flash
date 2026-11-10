@@ -1,0 +1,239 @@
+{
+  "name": {
+    "message": "Yellow Flash"
+  },
+  "description": {
+    "message": "Übergibt Downloads vom Browser an Yellow Flash."
+  },
+  "menu": {
+    "message": "Mit Yellow Flash herunterladen"
+  },
+  "video_download": {
+    "message": "Video herunterladen"
+  },
+  "video_more": {
+    "message": "Weitere Optionen"
+  },
+  "video_hide_here": {
+    "message": "Auf diesem Video ausblenden"
+  },
+  "video_never_site": {
+    "message": "Nie auf $site$",
+    "placeholders": {
+      "site": {
+        "content": "$1",
+        "example": "example.com"
+      }
+    }
+  },
+  "video_settings": {
+    "message": "Schaltflächeneinstellungen..."
+  },
+  "video_sent": {
+    "message": "An Yellow Flash gesendet"
+  },
+  "video_failed": {
+    "message": "Yellow Flash ist nicht installiert oder wurde nicht gestartet"
+  },
+  "video_drag": {
+    "message": "Ziehen, um es am Videorand zu verschieben"
+  },
+  "menu_selected": {
+    "message": "Ausgewählte Links mit Yellow Flash herunterladen"
+  },
+  "menu_all": {
+    "message": "Alle Links mit Yellow Flash herunterladen"
+  },
+  "status_connected": {
+    "message": "Mit Yellow Flash verbunden"
+  },
+  "status_connected_version": {
+    "message": "Mit Yellow Flash $version$ verbunden",
+    "placeholders": {
+      "version": {
+        "content": "$1",
+        "example": "0.2.5"
+      }
+    }
+  },
+  "status_paused": {
+    "message": "Angehalten: Downloads verbleiben im Browser"
+  },
+  "status_not_installed": {
+    "message": "Yellow Flash ist nicht installiert oder die Browserintegration ist nicht eingerichtet"
+  },
+  "status_forbidden": {
+    "message": "Yellow Flash akzeptiert diese Kopie der Erweiterung nicht"
+  },
+  "status_not_running": {
+    "message": "Yellow Flash wurde nicht rechtzeitig gestartet"
+  },
+  "status_host_failed": {
+    "message": "Die Verbindung zu Yellow Flash ist fehlgeschlagen"
+  },
+  "status_too_large": {
+    "message": "Die Details dieses Downloads waren zu groß, um sie zu übergeben"
+  },
+  "status_update_app": {
+    "message": "Aktualisieren Sie Yellow Flash, um alle Funktionen dieser Erweiterung nutzen zu können"
+  },
+  "popup_take": {
+    "message": "Downloads von diesem Browser übernehmen"
+  },
+  "popup_proxy": {
+    "message": "Downloads über den Proxy oder die VPN-Erweiterung dieses Browsers senden"
+  },
+  "popup_proxy_title": {
+    "message": "Yellow Flash lädt dann über denselben Proxy wie dieser Browser herunter. Der Browser fordert Sie einmal auf, dies zuzulassen; wenn Sie dies deaktivieren, wird dies rückgängig gemacht."
+  },
+  "popup_proxy_title_chromium": {
+    "message": "Yellow Flash lädt dann über denselben Proxy wie dieser Browser herunter. Wenn diese Option deaktiviert ist, liest die Erweiterung die Proxy-Einstellungen des Browsers nicht."
+  },
+  "popup_exclude_site": {
+    "message": "Niemals Downloads von $site$ übernehmen",
+    "placeholders": {
+      "site": {
+        "content": "$1",
+        "example": "example.com"
+      }
+    }
+  },
+  "popup_excluded": {
+    "message": "Downloads von $site$ bleiben beim Browser",
+    "placeholders": {
+      "site": {
+        "content": "$1",
+        "example": "example.com"
+      }
+    }
+  },
+  "popup_open": {
+    "message": "Yellow Flash öffnen"
+  },
+  "popup_options": {
+    "message": "Optionen..."
+  },
+  "popup_help": {
+    "message": "Hilfe"
+  },
+  "popup_fix": {
+    "message": "So beheben Sie es"
+  },
+  "popup_declined": {
+    "message": "Für den Browser belassen: $name$",
+    "placeholders": {
+      "name": {
+        "content": "$1",
+        "example": "setup.png"
+      }
+    }
+  },
+  "popup_declined_unnamed": {
+    "message": "Der letzte Download wurde dem Browser überlassen."
+  },
+  "declined_file_type": {
+    "message": "Der Typ ist nicht in „Optionen → Dateitypen“."
+  },
+  "declined_site": {
+    "message": "Die Website ist in „Optionen → Dateitypen, Websites für den Browser“."
+  },
+  "declined_address": {
+    "message": "Die Adresse ist in „Optionen → Dateitypen, Adressen für den Browser“."
+  },
+  "declined_small": {
+    "message": "Die Größe ist kleiner als die Mindestgröße in „Optionen → Dateitypen“."
+  },
+  "declined_browser": {
+    "message": "Dieser Browser ist in „Optionen → Allgemein“ nicht aktiviert."
+  },
+  "declined_integration_off": {
+    "message": "„Erweiterte Browserintegration verwenden“ ist in „Optionen → Allgemein“ deaktiviert."
+  },
+  "declined_site_access": {
+    "message": "Die Erweiterung darf diese Website nicht lesen (Websitezugriff des Browsers)."
+  },
+  "popup_alt": {
+    "message": "Halten Sie Alt gedrückt, während Sie auf einen Link klicken, damit der Browser ihn herunterlädt."
+  },
+  "popup_media": {
+    "message": "Medien auf dieser Seite"
+  },
+  "popup_media_none": {
+    "message": "Auf dieser Seite wurden noch keine Videos oder Sounds gefunden. Spielen Sie ein Video oder einen Sound ab und öffnen Sie dieses Fenster dann erneut."
+  },
+  "popup_media_streamed": {
+    "message": "Der Player dieser Seite streamt das Video in Stücken, daher gibt es keine Datei zum Auflisten. Zeigen Sie auf das Video und nutzen Sie seine Schaltfläche „Video herunterladen“."
+  },
+  "popup_media_store": {
+    "message": "Die Regeln des Chrome Web Store halten diese Kopie des Add-ons von den Videos dieser Website fern. Unter „Hilfe“ steht, was Sie tun können."
+  },
+  "popup_media_download": {
+    "message": "Herunterladen"
+  },
+  "popup_media_protected": {
+    "message": "Geschützt"
+  },
+  "popup_media_live": {
+    "message": "Live"
+  },
+  "video_off": {
+    "message": "Die Download-Schaltfläche ist auf dieser Website deaktiviert"
+  },
+  "video_drm": {
+    "message": "Geschütztes Video: kann nicht gespeichert werden"
+  },
+  "video_unnamed": {
+    "message": "Nicht erkennbar, welches Video das ist: Öffnen Sie seine eigene Seite und versuchen Sie es dort"
+  },
+  "popup_send_to": {
+    "message": "Downloads senden an"
+  },
+  "popup_send_here": {
+    "message": "Dieser Computer"
+  },
+  "popup_send_remote": {
+    "message": "Ein anderer Yellow Flash (ein Server)"
+  },
+  "popup_remote_code": {
+    "message": "Kopplungscode"
+  },
+  "popup_remote_open": {
+    "message": "Öffnen"
+  },
+  "popup_remote_pair": {
+    "message": "Koppeln"
+  },
+  "popup_remote_help": {
+    "message": "Öffnen Sie die Adresse einmal und akzeptieren Sie das Zertifikat, dann geben Sie einen Code aus den Optionen, Remote, Gerät koppeln (oder yellowflash-cli pair) ein."
+  },
+  "status_remote": {
+    "message": "Downloads gehen an $address$",
+    "placeholders": {
+      "address": {
+        "content": "$1",
+        "example": "https://192.168.1.10:8463/"
+      }
+    }
+  },
+  "remote_address": {
+    "message": "Geben Sie die HTTPS://-Adresse ein."
+  },
+  "remote_unreachable": {
+    "message": "Nicht erreicht. Öffnen Sie die Adresse einmal in diesem Browser und akzeptieren Sie das Zertifikat, dann versuchen Sie es erneut."
+  },
+  "remote_wrong_code": {
+    "message": "Falscher Code."
+  },
+  "remote_no_code": {
+    "message": "Es wird jetzt kein Code angezeigt: Klicken Sie dort zuerst auf „Gerät koppeln“."
+  },
+  "remote_too_soon": {
+    "message": "Warten Sie einen Moment, dann versuchen Sie es erneut."
+  },
+  "remote_failed": {
+    "message": "Es hat nicht funktioniert. Versuchen Sie es erneut."
+  },
+  "remote_device_name": {
+    "message": "Browsererweiterung"
+  }
+}

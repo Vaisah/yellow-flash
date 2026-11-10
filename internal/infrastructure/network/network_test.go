@@ -16,13 +16,18 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	domain "github.com/vaisah/internal/domain/download"
 )
 
 func TestValidateURL(t *testing.T) {
 	for raw, ok := range map[string]bool{
 		"https://example.com/file.zip":   true,
 		"HTTP://example.com:8080/a?b=c":  true,
-		"ftp://example.com/file":         false,
+		"ftp://example.com/file":         true,
+		"ftpes://me@example.com/file":    true,
+		"ftps://me:pw@example.com/file":  false, // a password never stays in an address
+		"gopher://example.com/x":         false,
 		"file:///etc/passwd":             false,
 		"https://user:pass@example.com/": false,
 		"/relative/path":                 false,
@@ -169,7 +174,7 @@ func probe(t *testing.T, h http.Handler) (string, func(), error) {
 	t.Helper()
 	srv := httptest.NewServer(h)
 	meta, err := NewProber(NewClient(Options{AllowPrivate: true})).Probe(context.Background(), srv.URL+"/files/report.pdf", nil)
-	return fmt.Sprintf("size=%d range=%v name=%q etag=%s sum=%d", meta.Size, meta.RangeSupported, meta.Filename, meta.ETag, len(meta.Checksum)), srv.Close, err
+	return fmt.Sprintf("size=%d range=%v name=%q etag=%s sum=%d", meta.Size, meta.RangeSupported, meta.Filename, meta.ETag, len(meta.Checksum.Value)), srv.Close, err
 }
 
 func TestProbeScenarios(t *testing.T) {
@@ -275,20 +280,81 @@ func TestChecksumHeaders(t *testing.T) {
 	sum := md5.Sum([]byte("x"))
 	h := http.Header{}
 	h.Set("Content-MD5", base64.StdEncoding.EncodeToString(sum[:]))
-	if alg, got := ChecksumFromHeaders(h, true); alg != "md5" || len(got) != 16 {
+	if got := ChecksumFromHeaders(h, true); got.Algorithm != domain.MD5 || len(got.Value) != 16 {
 		t.Fatal("content-md5 not parsed")
 	}
-	if _, got := ChecksumFromHeaders(h, false); got != nil {
+	if got := ChecksumFromHeaders(h, false); !got.IsZero() {
 		t.Fatal("content-md5 must be ignored on partial responses")
 	}
 	h = http.Header{}
 	h.Set("Repr-Digest", "sha-256=:47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=:")
-	if alg, got := ChecksumFromHeaders(h, false); alg != "sha-256" || len(got) != 32 {
+	if got := ChecksumFromHeaders(h, false); got.Algorithm != domain.SHA256 || len(got.Value) != 32 {
 		t.Fatal("repr-digest not parsed")
 	}
 	h.Set("Repr-Digest", "sha-256=:not-base64:")
-	if _, got := ChecksumFromHeaders(h, true); got != nil {
+	if got := ChecksumFromHeaders(h, true); !got.IsZero() {
 		t.Fatal("malformed digest must be ignored")
+	}
+}
+
+// Ported from Mister Download Manager, crates/engine/src/verify.rs (server_announced_hashes).
+func TestServerAnnouncedHashesTheStrongestWins(t *testing.T) {
+	h := http.Header{}
+	h.Set("Content-MD5", "nhB9nTcrtoJr2B01QqQZ1g==")
+	h.Set("Repr-Digest", "sha-256=:16j7swfXgJRpypq8sAguT41WUeRtPNt2LQLQvzfJ5ZI=:")
+	if got := ChecksumFromHeaders(h, true); got.Algorithm != domain.SHA256 {
+		t.Fatalf("the strongest: %s", got.Algorithm)
+	}
+	h.Del("Repr-Digest")
+	if got := ChecksumFromHeaders(h, true); got.Algorithm != domain.MD5 {
+		t.Fatalf("md5 alone: %s", got.Algorithm)
+	}
+	g := http.Header{}
+	g.Set("X-Goog-Hash", "crc32c=n03x6A==, md5=nhB9nTcrtoJr2B01QqQZ1g==")
+	if got := ChecksumFromHeaders(g, false); got.Algorithm != domain.MD5 {
+		t.Fatalf("x-goog-hash: %s", got.Algorithm)
+	}
+	s := http.Header{}
+	s.Set("Digest", "SHA=L9ThxnotKPzthJ7hu3bnORuT6xI=")
+	if got := ChecksumFromHeaders(s, false); got.Algorithm != domain.SHA1 {
+		t.Fatalf("Digest SHA: %s", got.Algorithm)
+	}
+}
+
+// Ported from Mister Download Manager, crates/engine/src/naming.rs (disposition tests).
+func TestContentDispositionLikeBrowsers(t *testing.T) {
+	name := "تقرير-été-日本.zip"
+	encoded := url.PathEscape(name)
+	for _, cd := range []string{
+		`attachment; filename="report.zip"; filename*=UTF-8''` + encoded,
+		`attachment; filename*=utf-8''` + encoded + `; filename=report.zip`,
+		`attachment; FILENAME*=UTF-8'ar'` + encoded + `; Filename="report.zip"`,
+		`attachment; filename*="UTF-8''` + encoded + `"`,
+	} {
+		if got := FilenameFromContentDisposition(cd); got != name {
+			t.Errorf("%s → %q", cd, got)
+		}
+	}
+	for cd, want := range map[string]string{
+		`attachment; filename*=ISO-8859-1''caf%E9%20cr%E8me.txt`:               "café crème.txt",
+		`attachment; filename="plain.txt"; filename*=KOI8-R''%C1%C2.txt`:       "plain.txt",
+		`attachment; filename="plain.txt"; filename*=UTF-8''%FF%FE.txt`:        "plain.txt",
+		`attachment; filename="plain.txt"; filename*=broken`:                   "plain.txt",
+		`attachment; filename="a; b.zip"; size=3`:                              "a; b.zip",
+		`attachment; filename="say \"hi\".txt"`:                                `say "hi".txt`,
+		`attachment; filename=  spaced.txt  ; x=1`:                             "spaced.txt",
+		`filename=no-type.pdf`:                                                 "no-type.pdf",
+		`attachment; filename="%E6%97%A5%E6%9C%AC.txt"`:                        "日本.txt",
+		`attachment; filename="100%25.txt"`:                                    "100%25.txt",
+		`attachment; filename="été.mp3"`:                                       "été.mp3",
+		`attachment; filename=""`:                                              "",
+		`attachment`:                                                           "",
+		`attachment; filename*=UTF-8''na%C3%AFve%20file.txt`:                   "naïve file.txt",
+		`attachment; filename*=UTF-8''photo%E2%80%AEgnp.scr; filename="x.scr"`: "photo‮gnp.scr",
+	} {
+		if got := FilenameFromContentDisposition(cd); got != want {
+			t.Errorf("%s → %q, want %q", cd, got, want)
+		}
 	}
 }
 

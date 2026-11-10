@@ -20,6 +20,9 @@ func revealPath(path string) error {
 	return start(exec.Command("xdg-open", dir))
 }
 
+// HideConsole does nothing here: only Windows opens a console window.
+func HideConsole(*exec.Cmd) {}
+
 func start(cmd *exec.Cmd) error {
 	if err := cmd.Start(); err != nil {
 		return err

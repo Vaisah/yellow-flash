@@ -8,22 +8,28 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/vaisah/internal/application/datacap"
 	"github.com/vaisah/internal/application/download"
 	"github.com/vaisah/internal/application/events"
+	"github.com/vaisah/internal/application/queues"
 	domain "github.com/vaisah/internal/domain/download"
+	"github.com/vaisah/internal/domain/queue"
 	"github.com/vaisah/internal/engine"
 	"github.com/vaisah/internal/infrastructure/network"
-	"github.com/vaisah/internal/infrastructure/persistence/sqlite"
+	"github.com/vaisah/internal/infrastructure/persistence/jsonstore"
+	"github.com/vaisah/internal/ipc"
 	"github.com/vaisah/internal/platform"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // AppName is the product name shown in the window and used for app data.
 const (
-	AppName    = "Yellow Flash"
-	AppVersion = "0.2.0"
+	AppName    = ipc.AppName
+	AppVersion = ipc.AppVersion
 )
 
 // errNotReady is returned when the UI calls in before startup finished.
@@ -34,12 +40,27 @@ var errNotReady = errors.New("application is not ready")
 type App struct {
 	ctx     context.Context
 	service *download.Service
-	store   *sqlite.Store
+	store   *jsonstore.Store
 	manager *engine.Manager
 	dataDir string
+	// queues runs the download queues and their schedules (set once the
+	// engine is up; read by the engine's event publisher).
+	queues     atomic.Pointer[queues.Runner]
+	dataCap    atomic.Pointer[datacap.Watcher]
+	stopQueues context.CancelFunc
+	// media holds the video and gallery downloads run by the helpers.
+	media mediaJobs
+	// torrents holds the torrent session and list.
+	torrents torrentHost
+
+	// Commands from the IPC channel wait here until the UI is ready.
+	commands chan ipc.Incoming
+	stop     chan struct{}
+	stopOnce sync.Once
+	closing  atomic.Bool
 }
 
-// Settings are user preferences persisted in SQLite.
+// Settings are user preferences persisted in the download list (downloads.json).
 type Settings struct {
 	DownloadDirectory string `json:"downloadDirectory"`
 	Connections       int    `json:"connections"`
@@ -70,28 +91,22 @@ const (
 	keyClipboard   = "ui.useClipboard"
 )
 
-// NewApp opens the state database. Data written by earlier builds under the
-// old "Download Manager" folder is moved to the Yellow Flash folder once.
-func NewApp() (*App, error) {
-	configDir, err := os.UserConfigDir()
+// NewApp opens the state database in dataDir (see ipc.DataDir). The caller
+// must hold the instance lock for dataDir.
+func NewApp(dataDir string) (*App, error) {
+	if err := ipc.PrivateDir(dataDir); err != nil {
+		return nil, err
+	}
+	store, err := jsonstore.Open(filepath.Join(dataDir, "downloads.json"))
 	if err != nil {
 		return nil, err
 	}
-	dataDir := filepath.Join(configDir, AppName)
-	legacy := filepath.Join(configDir, "Download Manager")
-	if _, err = os.Stat(dataDir); errors.Is(err, os.ErrNotExist) {
-		if _, legacyErr := os.Stat(legacy); legacyErr == nil {
-			_ = os.Rename(legacy, dataDir)
-		}
-	}
-	if err = os.MkdirAll(dataDir, 0o700); err != nil {
-		return nil, err
-	}
-	store, err := sqlite.Open(filepath.Join(dataDir, "downloads.db"))
-	if err != nil {
-		return nil, err
-	}
-	return &App{store: store, dataDir: dataDir}, nil
+	return &App{
+		store:    store,
+		dataDir:  dataDir,
+		commands: make(chan ipc.Incoming, commandBacklog),
+		stop:     make(chan struct{}),
+	}, nil
 }
 
 // Startup attaches Wails' application context and restores interrupted work.
@@ -101,11 +116,20 @@ func (a *App) Startup(ctx context.Context) {
 		runtime.EventsEmit(ctx, "downloads:updated", e.Download)
 		if e.Type == events.ProgressUpdated {
 			runtime.EventsEmit(ctx, "downloads:progress", e.Progress)
+		} else if r := a.queues.Load(); r != nil {
+			r.Notify() // a download changed: its queue may start the next one
 		}
 	})
 	// URLs typed by the user may legitimately point at LAN hosts (NAS,
-	// intranet). Browser-originated requests will use a restricted client.
-	manager, err := engine.New(a.store, engine.Config{AllowPrivateNetworks: true, Publisher: publisher})
+	// intranet). Browser-originated downloads use the engine's restricted
+	// client (CreateRequest.Restricted). DNS, proxy and FTP mode from the
+	// saved network settings.
+	dns, netOpts, err := a.engineNetwork(ctx)
+	if err != nil {
+		runtime.LogErrorf(ctx, "network settings: %v", err)
+	}
+	manager, err := engine.New(a.store, engine.Config{AllowPrivateNetworks: true, Publisher: publisher,
+		HostLimits: a.store, DNS: dns, Network: netOpts})
 	if err != nil {
 		runtime.LogErrorf(ctx, "start download engine: %v", err)
 		return
@@ -115,10 +139,60 @@ func (a *App) Startup(ctx context.Context) {
 	if err := a.service.Recover(ctx); err != nil {
 		runtime.LogErrorf(ctx, "recover downloads: %v", err)
 	}
+	runner, err := queues.New(ctx, a.manager, a.store.Queues(), nil)
+	if err != nil {
+		runtime.LogErrorf(ctx, "load queues: %v", err)
+		return
+	}
+	runner.OnDone = func(q queue.Queue) { a.queueDone(ctx, q) }
+	a.queues.Store(runner)
+	qctx, cancel := context.WithCancel(ctx)
+	a.stopQueues = cancel
+	runner.Startup(qctx)
+	go runner.Run(qctx)
+	go a.powerLoop(qctx)
+
+	// Download limits (a data cap) and the global speed limit.
+	cap := datacap.New(a.manager, nil)
+	cap.OnChange = func(blocked bool, until time.Time) {
+		runtime.EventsEmit(ctx, "datacap:changed", map[string]any{"blocked": blocked, "until": until})
+		if blocked {
+			a.notice(ctx, "info", "The download limit is reached: downloads wait until "+until.Local().Format("15:04"))
+		}
+	}
+	a.dataCap.Store(cap)
+	a.applyLiveSettings(a.GetNetworkSettings())
+	go cap.Run(qctx)
+	go a.registerBrowserHost(ctx)
+	go a.resumeTorrents()
+}
+
+// queueDone does what a finished queue's schedule asks.
+func (a *App) queueDone(ctx context.Context, q queue.Queue) {
+	runtime.EventsEmit(ctx, "queues:done", q)
+	s := q.Schedule
+	if s.OpenWhenDone != "" {
+		if err := platform.OpenPath(s.OpenWhenDone); err != nil {
+			a.notice(ctx, "error", "Could not open "+s.OpenWhenDone+": "+err.Error())
+		}
+	}
+	if s.TurnOff != "" {
+		// Turning off ends the app too: no separate exit.
+		a.startTurnOff(ctx, string(s.TurnOff), s.ForceClose)
+		return
+	}
+	if s.ExitWhenDone {
+		runtime.Quit(ctx)
+	}
 }
 
 // Shutdown pauses active downloads, persisting progress, then closes the DB.
 func (a *App) Shutdown(ctx context.Context) {
+	a.stopCommands()
+	if a.stopQueues != nil {
+		a.stopQueues()
+	}
+	a.stopTorrents()
 	canClose := true
 	if a.service != nil {
 		waitCtx, cancel := context.WithTimeout(ctx, 20*time.Second)

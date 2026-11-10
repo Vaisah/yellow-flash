@@ -29,8 +29,8 @@ import (
 	"github.com/vaisah/internal/application/events"
 	domain "github.com/vaisah/internal/domain/download"
 	"github.com/vaisah/internal/engine"
+	"github.com/vaisah/internal/infrastructure/persistence/jsonstore"
 	"github.com/vaisah/internal/infrastructure/persistence/memory"
-	"github.com/vaisah/internal/infrastructure/persistence/sqlite"
 )
 
 type headerFlags map[string]string
@@ -53,7 +53,7 @@ func run() int {
 	dir := flag.String("dir", "downloads", "destination directory")
 	name := flag.String("name", "", "output filename (default: from server or URL)")
 	conns := flag.Int("c", 8, "connections per download")
-	dbPath := flag.String("db", "", "SQLite state file (enables resume across runs)")
+	dbPath := flag.String("db", "", "JSON download list, e.g. state/downloads.json (enables resume across runs)")
 	resume := flag.String("resume", "", "resume the download with this ID")
 	list := flag.Bool("list", false, "list recorded downloads and exit")
 	retries := flag.Int("retries", 5, "maximum retries per request")
@@ -76,7 +76,7 @@ func run() int {
 
 	var store domain.Store = memory.New()
 	if *dbPath != "" {
-		s, err := sqlite.Open(*dbPath)
+		s, err := jsonstore.Open(*dbPath)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "open state:", err)
 			return 1

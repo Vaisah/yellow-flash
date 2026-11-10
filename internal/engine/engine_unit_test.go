@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -249,13 +250,22 @@ func TestVerifyFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	sum := sha256.Sum256(data)
-	ok := domain.RemoteMetadata{Size: int64(len(data)), ChecksumAlgorithm: "sha-256", Checksum: sum[:]}
-	if n, err := verifyFile(context.Background(), path, ok); err != nil || n != int64(len(data)) {
+	ok := domain.RemoteMetadata{Size: int64(len(data)), Checksum: domain.Checksum{Algorithm: domain.SHA256, Value: sum[:]}}
+	if n, err := verifyFile(context.Background(), path, ok, ""); err != nil || n != int64(len(data)) {
 		t.Fatalf("verify: %d %v", n, err)
 	}
-	for _, bad := range []domain.RemoteMetadata{{Size: 3}, {Size: -1, ChecksumAlgorithm: "sha-256", Checksum: make([]byte, 32)}} {
-		if _, err := verifyFile(context.Background(), path, bad); !errors.Is(err, ErrIntegrity) {
+	for _, bad := range []domain.RemoteMetadata{{Size: 3}, {Size: -1, Checksum: domain.Checksum{Algorithm: domain.SHA256, Value: make([]byte, 32)}}} {
+		if _, err := verifyFile(context.Background(), path, bad, ""); !errors.Is(err, ErrIntegrity) {
 			t.Fatalf("bad file accepted: %+v %v", bad, err)
 		}
+	}
+	// The user's checksum wins over the server's: a right one passes a wrong server hash...
+	wrongServer := domain.RemoteMetadata{Size: -1, Checksum: domain.Checksum{Algorithm: domain.SHA256, Value: make([]byte, 32)}}
+	if _, err := verifyFile(context.Background(), path, wrongServer, "sha256:"+hex.EncodeToString(sum[:])); err != nil {
+		t.Fatalf("user checksum: %v", err)
+	}
+	// ...and a wrong one fails a file the server's hash would pass.
+	if _, err := verifyFile(context.Background(), path, ok, "md5:00000000000000000000000000000000"); !errors.Is(err, ErrIntegrity) {
+		t.Fatalf("wrong user checksum accepted: %v", err)
 	}
 }

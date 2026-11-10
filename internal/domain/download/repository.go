@@ -1,6 +1,25 @@
 package download
 
-import "context"
+import (
+	"context"
+	"time"
+)
+
+// HostLimit is the number of connections a server was learned to allow.
+type HostLimit struct {
+	Host           string
+	MaxConnections int
+	// Seen counts the refusals the limit was learned from.
+	Seen      int
+	UpdatedAt time.Time
+}
+
+// HostLimitStore persists learned per-host connection limits, so a restart
+// does not have to learn them again.
+type HostLimitStore interface {
+	LoadHostLimits(ctx context.Context) ([]HostLimit, error)
+	SaveHostLimit(ctx context.Context, l HostLimit) error
+}
 
 // Repository persists download records. Get returns an error wrapping
 // ErrNotFound when the record does not exist.

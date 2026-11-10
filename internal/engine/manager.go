@@ -11,6 +11,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"net/textproto"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -23,12 +24,16 @@ import (
 	domain "github.com/vaisah/internal/domain/download"
 	"github.com/vaisah/internal/infrastructure/filesystem"
 	"github.com/vaisah/internal/infrastructure/network"
+	"github.com/vaisah/internal/infrastructure/network/sites"
 	"github.com/vaisah/internal/platform"
 )
 
 // Prober discovers remote metadata. *network.Prober satisfies it.
 type Prober interface {
 	Probe(ctx context.Context, url string, headers http.Header) (domain.RemoteMetadata, error)
+	// Open sends a download's first request; the response body is the
+	// file from byte 0 (nil for an empty file).
+	Open(ctx context.Context, url string, headers http.Header) (domain.RemoteMetadata, *http.Response, error)
 }
 
 // Config tunes the engine. Zero values select defaults.
@@ -61,7 +66,29 @@ type Config struct {
 	ReadIdleTimeout time.Duration
 	// DefaultDirectory is used when a request has none (default ~/Downloads).
 	DefaultDirectory string
+	// HostLimits persists learned per-server connection limits; nil keeps
+	// them in memory only.
+	HostLimits domain.HostLimitStore
+	// HostLimitDecay is how long a learned limit lasts without being seen
+	// again (default 10 minutes).
+	HostLimitDecay time.Duration
+	// DNS is the resolver the default client uses; nil is the system's.
+	DNS *network.DNSChoice
+	// Network tunes the default client: proxy, PAC script, FTP active
+	// mode. AllowPrivate, MaxConnsPerHost and DNS come from the fields
+	// above.
+	Network network.Options
+	// RestrictedClient and RestrictedProber serve downloads whose address
+	// came from a web page (CreateRequest.Restricted): loopback, private
+	// and link-local destinations are refused whatever AllowPrivateNetworks
+	// says. Default: the default client's settings without them; with an
+	// injected Client (tests), that client and its prober.
+	RestrictedClient network.Doer
+	RestrictedProber Prober
 }
+
+// BytesReceived counts every byte the downloads have received so far.
+func (m *Manager) BytesReceived() int64 { return m.limiter.Taken() }
 
 const (
 	hardMaxConnections = 32
@@ -89,11 +116,31 @@ func (c Config) withDefaults() Config {
 	if c.ReadIdleTimeout <= 0 {
 		c.ReadIdleTimeout = 60 * time.Second
 	}
+	if c.HostLimitDecay <= 0 {
+		c.HostLimitDecay = hostLimitDecay
+	}
+	injected, proberGiven := c.Client != nil, c.Prober != nil
 	if c.Client == nil {
-		c.Client = network.NewClient(network.Options{AllowPrivate: c.AllowPrivateNetworks, MaxConnsPerHost: c.MaxConnections * 2})
+		opts := c.Network
+		opts.AllowPrivate, opts.MaxConnsPerHost, opts.DNS = c.AllowPrivateNetworks, c.MaxConnections*2, c.DNS
+		c.Client = network.NewClient(opts)
+	}
+	if c.RestrictedClient == nil {
+		c.RestrictedClient = c.Client
+		if !injected {
+			opts := c.Network
+			opts.AllowPrivate, opts.MaxConnsPerHost, opts.DNS = false, c.MaxConnections*2, c.DNS
+			c.RestrictedClient = network.NewClient(opts)
+		}
 	}
 	if c.Prober == nil {
 		c.Prober = network.NewProber(c.Client)
+	}
+	if c.RestrictedProber == nil {
+		c.RestrictedProber = c.Prober
+		if !injected && !proberGiven {
+			c.RestrictedProber = network.NewProber(c.RestrictedClient)
+		}
 	}
 	if c.Publisher == nil {
 		c.Publisher = events.Nop{}
@@ -114,6 +161,8 @@ type entry struct {
 	cancel  context.CancelFunc
 	done    chan struct{}
 	tracker *tracker
+	// limiter enforces the download's own speed limit while it runs.
+	limiter *Limiter
 }
 
 // Manager owns download lifecycles. It is the single authority for status
@@ -128,10 +177,64 @@ type Manager struct {
 	baseCancel context.CancelFunc
 	wg         sync.WaitGroup
 
+	// limiter caps the combined speed of all downloads (unlimited by default).
+	limiter *Limiter
+	// hosts holds learned per-server connection limits.
+	hosts *hostLimits
+
 	mu       sync.Mutex
 	items    map[string]*entry
 	stopping bool
 }
+
+// SetSpeedLimit caps the combined download speed in bytes per second;
+// 0 or less removes the limit. It applies at once to running downloads.
+func (m *Manager) SetSpeedLimit(bytesPerSecond int64) { m.limiter.Set(bytesPerSecond) }
+
+// SpeedLimit returns the current limit in bytes per second (0 = none).
+func (m *Manager) SpeedLimit() int64 { return m.limiter.Rate() }
+
+// SetDownloadSpeedLimit caps one download in bytes per second (0 or less:
+// unlimited). It is persisted, and applies at once if the download runs.
+func (m *Manager) SetDownloadSpeedLimit(ctx context.Context, id string, bytesPerSecond int64) error {
+	e, err := m.entryFor(ctx, id)
+	if err != nil {
+		return err
+	}
+	bytesPerSecond = max(0, bytesPerSecond)
+	snap := m.update(e, func(d *domain.Download) { d.SpeedLimit = bytesPerSecond })
+	m.mu.Lock()
+	if e.limiter != nil {
+		e.limiter.Set(bytesPerSecond)
+	}
+	m.mu.Unlock()
+	return m.save(ctx, snap)
+}
+
+// restricted reports a download whose address came from a web page: it
+// gets the restricted client and prober.
+func (m *Manager) restricted(e *entry) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return e.d.Restricted
+}
+
+func (m *Manager) clientFor(e *entry) network.Doer {
+	if m.restricted(e) {
+		return m.cfg.RestrictedClient
+	}
+	return m.cfg.Client
+}
+
+func (m *Manager) proberFor(e *entry) Prober {
+	if m.restricted(e) {
+		return m.cfg.RestrictedProber
+	}
+	return m.cfg.Prober
+}
+
+// HostLimits lists the per-server connection limits learned so far.
+func (m *Manager) HostLimits() []domain.HostLimit { return m.hosts.learned() }
 
 // New creates a Manager. store is required.
 func New(store domain.Store, cfg Config) (*Manager, error) {
@@ -144,7 +247,16 @@ func New(store domain.Store, cfg Config) (*Manager, error) {
 		policy = cfg.Retry.normalized()
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Manager{cfg: cfg, retry: policy, store: store, publisher: filesystem.NewPublisher(), baseCtx: ctx, baseCancel: cancel, items: map[string]*entry{}}, nil
+	m := &Manager{cfg: cfg, retry: policy, store: store, publisher: filesystem.NewPublisher(), baseCtx: ctx, baseCancel: cancel,
+		items: map[string]*entry{}, limiter: NewLimiter(0), hosts: newHostLimits(cfg.HostLimitDecay)}
+	if cfg.HostLimits != nil {
+		saved, err := cfg.HostLimits.LoadHostLimits(ctx)
+		if err != nil {
+			cfg.Logger.Warn("load learned connection limits failed", "err", err)
+		}
+		m.hosts.load(saved)
+	}
+	return m, nil
 }
 
 // managedHeaders are controlled by the engine and may not be overridden.
@@ -184,9 +296,26 @@ func (m *Manager) Create(ctx context.Context, req domain.CreateRequest) (*domain
 	if stopping {
 		return nil, domain.ErrShuttingDown
 	}
-	u, err := network.ValidateURL(network.UnwrapLink(req.URL))
+	rawURL := network.UnwrapLink(req.URL)
+	// An FTP login in the address: the password goes to the secret store
+	// (as an Authorization header), never into the saved address.
+	if pu, perr := url.Parse(strings.TrimSpace(rawURL)); perr == nil && network.IsFTP(pu) {
+		if stripped, login := network.FTPLoginHeader(pu); login != "" {
+			rawURL = stripped.String()
+			headers := make(map[string]string, len(req.Headers)+1)
+			for k, v := range req.Headers {
+				headers[k] = v
+			}
+			headers["Authorization"] = login
+			req.Headers = headers
+		}
+	}
+	u, err := network.ValidateURL(rawURL)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", domain.ErrInvalidRequest, err)
+	}
+	if r := sites.NotAFile(u); r != nil { // a Google Drive folder
+		return nil, fmt.Errorf("%w: %w", domain.ErrInvalidRequest, r)
 	}
 	dir := strings.TrimSpace(req.Directory)
 	if dir == "" {
@@ -225,9 +354,18 @@ func (m *Manager) Create(ctx context.Context, req domain.CreateRequest) (*domain
 	if err != nil {
 		return nil, err
 	}
+	checksum, err := domain.ParseChecksum(req.Checksum)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", domain.ErrInvalidRequest, err)
+	}
+	if req.SpeedLimit < 0 {
+		return nil, fmt.Errorf("%w: speed limit must not be negative", domain.ErrInvalidRequest)
+	}
+	name = filesystem.FitName(dir, name)
 	now := time.Now().UTC()
 	d := &domain.Download{ID: uuid.NewString(), URL: u.String(), FilenameExplicit: explicit, Destination: dir,
 		Size: domain.UnknownSize, Connections: conns, Status: domain.Queued, QueueID: req.QueueID, Headers: public,
+		SpeedLimit: req.SpeedLimit, ExpectedChecksum: checksum.String(), Restricted: req.Restricted,
 		CreatedAt: now, UpdatedAt: now}
 	m.mu.Lock()
 	d.Filename = m.reserveNameLocked(dir, name, d.ID)
@@ -355,6 +493,11 @@ func (m *Manager) begin(ctx context.Context, id string, allowed ...domain.Status
 		return err
 	}
 	e.d.Error = ""
+	if e.limiter == nil {
+		e.limiter = NewLimiter(e.d.SpeedLimit)
+	} else {
+		e.limiter.Set(e.d.SpeedLimit)
+	}
 	runCtx, cancel := context.WithCancel(m.baseCtx)
 	e.cancel, e.done = cancel, make(chan struct{})
 	snap := e.d.Clone()

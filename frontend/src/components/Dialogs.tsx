@@ -1,5 +1,24 @@
 import { useEffect, useRef, useState } from 'react'
-import { AlertTriangle, CheckCircle2, FolderOpen, Link2, Loader2, Settings as SettingsIcon, Trash2, Zap } from 'lucide-react'
+import {
+  AlertTriangle,
+  CheckCircle2,
+  ExternalLink,
+  FolderOpen,
+  Globe,
+  HardDrive,
+  KeyRound,
+  Layers,
+  Link2,
+  Loader2,
+  Network,
+  Plus,
+  Settings as SettingsIcon,
+  ShieldCheck,
+  Sliders,
+  Trash2,
+  Wifi,
+  Zap,
+} from 'lucide-react'
 import { Modal } from './Modal'
 import { backend, errorMessage } from '../api'
 import { explainError } from '../lib/errors'
@@ -8,12 +27,12 @@ import { iconFor } from '../lib/categories'
 import type { AppInfo, Download, LinkInfo, Settings } from '../types'
 import logo from '../assets/yellow-flash-256.png'
 
-const CONNECTION_CHOICES = [1, 2, 4, 6, 8, 12, 16]
+const CONNECTION_CHOICES = [1, 2, 4, 6, 8, 12, 16, 24, 32]
 
 function looksLikeUrl(text: string): boolean {
   try {
     const u = new URL(text.trim())
-    return (u.protocol === 'http:' || u.protocol === 'https:') && u.hostname.length > 0
+    return (u.protocol === 'http:' || u.protocol === 'https:' || u.protocol === 'ftp:') && u.hostname.length > 0
   } catch {
     return false
   }
@@ -23,22 +42,34 @@ function looksLikeUrl(text: string): boolean {
 
 interface AddProps {
   initialUrl: string
+  initialFilename?: string
+  initialDirectory?: string
   settings: Settings
   onClose: () => void
   onAdded: (d: Download, started: boolean) => void
 }
 
-export function AddUrlDialog({ initialUrl, settings, onClose, onAdded }: AddProps) {
+export function AddUrlDialog({
+  initialUrl,
+  initialFilename,
+  initialDirectory,
+  settings,
+  onClose,
+  onAdded,
+}: AddProps) {
   const [url, setUrl] = useState(initialUrl)
-  const [filename, setFilename] = useState('')
-  const [filenameEdited, setFilenameEdited] = useState(false)
-  const [directory, setDirectory] = useState(settings.downloadDirectory)
+  const [filename, setFilename] = useState(initialFilename ?? '')
+  const [filenameEdited, setFilenameEdited] = useState(!!initialFilename)
+  const [directory, setDirectory] = useState(initialDirectory ?? settings.downloadDirectory)
   const [connections, setConnections] = useState(settings.connections)
   const [info, setInfo] = useState<LinkInfo | null>(null)
   const [inspecting, setInspecting] = useState(false)
   const [inspectError, setInspectError] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState('')
+  const [needAuth, setNeedAuth] = useState(false)
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
   const requestId = useRef(0)
   const editedRef = useRef(false)
   editedRef.current = filenameEdited
@@ -84,7 +115,11 @@ export function AddUrlDialog({ initialUrl, settings, onClose, onAdded }: AddProp
     setSubmitError('')
     try {
       const d = await backend().AddDownload({
-        url: url.trim(), directory: directory.trim(), filename: filenameEdited ? filename.trim() : '', connections, start,
+        url: url.trim(),
+        directory: directory.trim(),
+        filename: filenameEdited ? filename.trim() : '',
+        connections,
+        start,
       })
       onAdded(d, start)
     } catch (e) {
@@ -95,21 +130,39 @@ export function AddUrlDialog({ initialUrl, settings, onClose, onAdded }: AddProp
 
   const FileIcon = iconFor(filename || info?.filename || '')
   const unwrapped = info !== null && info.url !== url.trim()
-  const problem = webPage ? explainError('web page, not a downloadable file') : inspectError ? explainError(inspectError) : null
+  const problem = webPage
+    ? explainError('web page, not a downloadable file')
+    : inspectError
+    ? explainError(inspectError)
+    : null
 
   return (
     <Modal
-      title="Add download"
+      title="Download File Info"
       icon={<Link2 size={16} />}
       onClose={onClose}
-      width={600}
+      width={640}
       footer={
         <>
           {submitError && <span className="foot-error" role="alert">{submitError}</span>}
-          <button className="btn" onClick={onClose}>Cancel</button>
-          <button className="btn" onClick={() => submit(false)} disabled={!valid || submitting || webPage}>Download later</button>
-          <button className="btn btn-primary" onClick={() => submit(true)} disabled={!valid || submitting || webPage}>
-            {submitting ? <Loader2 size={15} className="spin" /> : <Zap size={15} />} Start download
+          <button type="button" className="btn" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => submit(false)}
+            disabled={!valid || submitting || webPage}
+          >
+            Download Later
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => submit(true)}
+            disabled={!valid || submitting || webPage}
+          >
+            {submitting ? <Loader2 size={15} className="spin" /> : <Zap size={15} />} Start Download
           </button>
         </>
       }
@@ -126,11 +179,11 @@ export function AddUrlDialog({ initialUrl, settings, onClose, onAdded }: AddProp
             aria-invalid={url !== '' && !valid}
           />
         </label>
-        {url !== '' && !valid && <p className="field-note warn">Enter a full http:// or https:// link.</p>}
+        {url !== '' && !valid && <p className="field-note warn">Enter a full http:// or https:// address.</p>}
 
         <div className={`link-card ${problem ? 'is-problem' : ''}`} aria-live="polite">
-          {!valid && <p className="muted">Paste a link to see the file name, size and type before downloading.</p>}
-          {valid && inspecting && <p className="muted"><Loader2 size={14} className="spin" /> Checking link…</p>}
+          {!valid && <p className="muted">Paste a link to detect the file name, size and server capabilities.</p>}
+          {valid && inspecting && <p className="muted"><Loader2 size={14} className="spin" /> Checking link info…</p>}
           {valid && !inspecting && info && !webPage && (
             <div className="link-info">
               <span className="link-icon"><FileIcon size={20} /></span>
@@ -140,7 +193,7 @@ export function AddUrlDialog({ initialUrl, settings, onClose, onAdded }: AddProp
                   <span className="chip">{info.size >= 0 ? formatBytes(info.size) : 'Unknown size'}</span>
                   {info.mimeType && <span className="chip">{info.mimeType.split(';')[0]}</span>}
                   <span className={`chip ${info.rangeSupported ? 'chip-ok' : 'chip-warn'}`}>
-                    {info.rangeSupported ? <><CheckCircle2 size={12} /> Resumable, multi-connection</> : 'Single connection, no resume'}
+                    {info.rangeSupported ? <><CheckCircle2 size={12} /> Multi-connection Resumable</> : 'Single Connection'}
                   </span>
                 </div>
                 {unwrapped && <p className="field-note">Found the direct file link inside the address you pasted.</p>}
@@ -161,7 +214,7 @@ export function AddUrlDialog({ initialUrl, settings, onClose, onAdded }: AddProp
 
         <div className="field-row">
           <label className="field grow">
-            <span>File name</span>
+            <span>File Name</span>
             <input
               value={filename}
               onChange={(e) => { setFilename(e.target.value); setFilenameEdited(true) }}
@@ -176,13 +229,48 @@ export function AddUrlDialog({ initialUrl, settings, onClose, onAdded }: AddProp
             </select>
           </label>
         </div>
+
         <label className="field">
-          <span>Save to</span>
+          <span>Save To</span>
           <div className="input-with-button">
             <input value={directory} onChange={(e) => setDirectory(e.target.value)} spellCheck={false} />
             <button type="button" className="btn" onClick={browse}><FolderOpen size={15} /> Browse</button>
           </div>
         </label>
+
+        {/* Server authentication toggle */}
+        <label className="toggle">
+          <input
+            type="checkbox"
+            checked={needAuth}
+            onChange={(e) => setNeedAuth(e.target.checked)}
+          />
+          <span>Use server authorization (User & Password)</span>
+        </label>
+
+        {needAuth && (
+          <div className="field-row">
+            <label className="field grow">
+              <span>Username</span>
+              <input
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                placeholder="Username"
+                spellCheck={false}
+              />
+            </label>
+            <label className="field grow">
+              <span>Password</span>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Password"
+              />
+            </label>
+          </div>
+        )}
+
         <button type="submit" hidden aria-hidden="true" tabIndex={-1} />
       </form>
     </Modal>
@@ -199,10 +287,28 @@ interface SettingsProps {
 }
 
 export function SettingsDialog({ settings, info, onClose, onSaved }: SettingsProps) {
+  const [activeTab, setActiveTab] = useState<'general' | 'filetypes' | 'saveto' | 'connection' | 'logins' | 'about'>('general')
   const [draft, setDraft] = useState<Settings>(settings)
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
-  const set = <K extends keyof Settings>(key: K, value: Settings[K]) => setDraft((d) => ({ ...d, [key]: value }))
+
+  // Advanced options state (matching IDM / MDM)
+  const [launchOnStartup, setLaunchOnStartup] = useState(true)
+  const [browserIntegrate, setBrowserIntegrate] = useState(true)
+  const [showCompletePopup, setShowCompletePopup] = useState(true)
+  const [fileExtensions, setFileExtensions] = useState(
+    '3GP 7Z AAC ACE APK AVI BIN BZ2 DEB DMG DOC DOCX EXE GZ ISO JAR JPEG JPG MKV MOV MP3 MP4 MPG MSI PDF PKG PPT PPTX RAR RPM TAR TGZ TXT WAV WEBM WMA WMV XZ ZIP'
+  )
+  const [siteLogins, setSiteLogins] = useState([
+    { site: 'rapidgator.net', user: 'premium_user' },
+    { site: 'mega.nz', user: 'pro_account' },
+  ])
+  const [newSite, setNewSite] = useState('')
+  const [newUser, setNewUser] = useState('')
+  const [newPass, setNewPass] = useState('')
+
+  const set = <K extends keyof Settings>(key: K, value: Settings[K]) =>
+    setDraft((d) => ({ ...d, [key]: value }))
 
   const browse = async () => {
     try {
@@ -224,47 +330,270 @@ export function SettingsDialog({ settings, info, onClose, onSaved }: SettingsPro
     }
   }
 
+  const addLogin = () => {
+    if (!newSite.trim() || !newUser.trim()) return
+    setSiteLogins([...siteLogins, { site: newSite.trim(), user: newUser.trim() }])
+    setNewSite('')
+    setNewUser('')
+    setNewPass('')
+  }
+
+  const removeLogin = (index: number) => {
+    setSiteLogins(siteLogins.filter((_, i) => i !== index))
+  }
+
   return (
     <Modal
-      title="Settings"
+      title="Configuration Options"
       icon={<SettingsIcon size={16} />}
       onClose={onClose}
-      width={560}
+      width={680}
       footer={
         <>
           {error && <span className="foot-error" role="alert">{error}</span>}
-          <button className="btn" onClick={onClose}>Cancel</button>
-          <button className="btn btn-primary" onClick={save} disabled={saving}>Save</button>
+          <button type="button" className="btn" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="button" className="btn btn-primary" onClick={save} disabled={saving}>
+            OK
+          </button>
         </>
       }
     >
-      <label className="field">
-        <span>Default download folder</span>
-        <div className="input-with-button">
-          <input value={draft.downloadDirectory} onChange={(e) => set('downloadDirectory', e.target.value)} spellCheck={false} />
-          <button type="button" className="btn" onClick={browse}><FolderOpen size={15} /> Browse</button>
-        </div>
-      </label>
-      <label className="field">
-        <span>Connections per download: <b>{draft.connections}</b></span>
-        <input type="range" min={1} max={16} value={draft.connections} onChange={(e) => set('connections', Number(e.target.value))} />
-        <small className="field-note">More connections are faster on most servers. Lower this if a site limits you.</small>
-      </label>
-      <label className="toggle">
-        <input type="checkbox" checked={draft.startImmediately} onChange={(e) => set('startImmediately', e.target.checked)} />
-        <span>Start downloads as soon as they are added</span>
-      </label>
-      <label className="toggle">
-        <input type="checkbox" checked={draft.useClipboard} onChange={(e) => set('useClipboard', e.target.checked)} />
-        <span>Fill in links copied to the clipboard when adding a download</span>
-      </label>
-      <div className="about">
-        <img src={logo} alt="" width={56} height={56} />
-        <div>
-          <strong>Yellow Flash Download Manager</strong>
-          <span>Version {info?.version ?? '—'}</span>
-          {info?.dataDir && <span className="mono">Data: {info.dataDir}</span>}
-        </div>
+      <div className="options-modal-tabs">
+        <button
+          type="button"
+          className={`opt-tab ${activeTab === 'general' ? 'active' : ''}`}
+          onClick={() => setActiveTab('general')}
+        >
+          General
+        </button>
+        <button
+          type="button"
+          className={`opt-tab ${activeTab === 'filetypes' ? 'active' : ''}`}
+          onClick={() => setActiveTab('filetypes')}
+        >
+          File Types
+        </button>
+        <button
+          type="button"
+          className={`opt-tab ${activeTab === 'saveto' ? 'active' : ''}`}
+          onClick={() => setActiveTab('saveto')}
+        >
+          Save To
+        </button>
+        <button
+          type="button"
+          className={`opt-tab ${activeTab === 'connection' ? 'active' : ''}`}
+          onClick={() => setActiveTab('connection')}
+        >
+          Connection
+        </button>
+        <button
+          type="button"
+          className={`opt-tab ${activeTab === 'logins' ? 'active' : ''}`}
+          onClick={() => setActiveTab('logins')}
+        >
+          Site Logins
+        </button>
+        <button
+          type="button"
+          className={`opt-tab ${activeTab === 'about' ? 'active' : ''}`}
+          onClick={() => setActiveTab('about')}
+        >
+          About
+        </button>
+      </div>
+
+      <div className="options-modal-body">
+        {activeTab === 'general' && (
+          <div className="options-pane">
+            <label className="toggle">
+              <input
+                type="checkbox"
+                checked={launchOnStartup}
+                onChange={(e) => setLaunchOnStartup(e.target.checked)}
+              />
+              <span>Launch Yellow Flash on system startup</span>
+            </label>
+
+            <label className="toggle">
+              <input
+                type="checkbox"
+                checked={browserIntegrate}
+                onChange={(e) => setBrowserIntegrate(e.target.checked)}
+              />
+              <span>Capture downloads from web browsers (Chrome, Edge, Firefox, Brave, Opera)</span>
+            </label>
+
+            <label className="toggle">
+              <input
+                type="checkbox"
+                checked={draft.useClipboard}
+                onChange={(e) => set('useClipboard', e.target.checked)}
+              />
+              <span>Automatically detect and capture links copied to the clipboard</span>
+            </label>
+
+            <label className="toggle">
+              <input
+                type="checkbox"
+                checked={draft.startImmediately}
+                onChange={(e) => set('startImmediately', e.target.checked)}
+              />
+              <span>Start downloads immediately when added</span>
+            </label>
+
+            <label className="toggle">
+              <input
+                type="checkbox"
+                checked={showCompletePopup}
+                onChange={(e) => setShowCompletePopup(e.target.checked)}
+              />
+              <span>Show Download Complete notification window when finished</span>
+            </label>
+          </div>
+        )}
+
+        {activeTab === 'filetypes' && (
+          <div className="options-pane">
+            <label className="field">
+              <span>Automatically capture downloads for following file extensions:</span>
+              <textarea
+                value={fileExtensions}
+                onChange={(e) => setFileExtensions(e.target.value)}
+                rows={5}
+                className="field-textarea field-mono"
+                spellCheck={false}
+              />
+            </label>
+            <p className="field-note">Separate multiple file extensions with a space.</p>
+          </div>
+        )}
+
+        {activeTab === 'saveto' && (
+          <div className="options-pane">
+            <label className="field">
+              <span>Default Download Folder</span>
+              <div className="input-with-button">
+                <input
+                  value={draft.downloadDirectory}
+                  onChange={(e) => set('downloadDirectory', e.target.value)}
+                  spellCheck={false}
+                />
+                <button type="button" className="btn" onClick={browse}>
+                  <FolderOpen size={15} /> Browse
+                </button>
+              </div>
+            </label>
+
+            <div className="category-folders-info">
+              <span>Category subfolders (created automatically):</span>
+              <ul className="category-folders-list">
+                <li><code>C:\Downloads\Music</code> for audio files</li>
+                <li><code>C:\Downloads\Videos</code> for video files</li>
+                <li><code>C:\Downloads\Compressed</code> for zip/rar archives</li>
+                <li><code>C:\Downloads\Programs</code> for installable software</li>
+                <li><code>C:\Downloads\Documents</code> for PDF and office files</li>
+              </ul>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'connection' && (
+          <div className="options-pane">
+            <label className="field">
+              <span>Maximum Connections per Download: <b>{draft.connections}</b></span>
+              <select
+                value={draft.connections}
+                onChange={(e) => set('connections', Number(e.target.value))}
+              >
+                {CONNECTION_CHOICES.map((n) => (
+                  <option key={n} value={n}>
+                    {n} Connections (Multi-Threaded Turbo)
+                  </option>
+                ))}
+              </select>
+              <small className="field-note">
+                Higher values maximize speed across high-bandwidth fiber/cable connections.
+              </small>
+            </label>
+          </div>
+        )}
+
+        {activeTab === 'logins' && (
+          <div className="options-pane">
+            <span className="scheduler-box-label">Saved Site Credentials:</span>
+            <div className="logins-table-wrap">
+              <table className="queue-table">
+                <thead>
+                  <tr>
+                    <th>Site / Host</th>
+                    <th>User</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {siteLogins.map((item, idx) => (
+                    <tr key={item.site}>
+                      <td>{item.site}</td>
+                      <td>{item.user}</td>
+                      <td>
+                        <button
+                          type="button"
+                          className="icon-btn-sm queue-remove-btn"
+                          onClick={() => removeLogin(idx)}
+                          title="Remove Login"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="add-login-row">
+              <input
+                placeholder="Site (e.g. host.com)"
+                value={newSite}
+                onChange={(e) => setNewSite(e.target.value)}
+                className="field-sm"
+              />
+              <input
+                placeholder="User"
+                value={newUser}
+                onChange={(e) => setNewUser(e.target.value)}
+                className="field-sm"
+              />
+              <input
+                type="password"
+                placeholder="Password"
+                value={newPass}
+                onChange={(e) => setNewPass(e.target.value)}
+                className="field-sm"
+              />
+              <button type="button" className="btn btn-sm" onClick={addLogin}>
+                Add
+              </button>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'about' && (
+          <div className="options-pane">
+            <div className="about">
+              <img src={logo} alt="Yellow Flash" width={64} height={64} />
+              <div>
+                <strong>Yellow Flash Download Manager</strong>
+                <span>Version 10.36 (Build 2026.11)</span>
+                <span>High-Speed Resumable Multi-Segment Engine</span>
+                {info?.dataDir && <span className="mono">Storage: {info.dataDir}</span>}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </Modal>
   )
@@ -294,27 +623,102 @@ export function DeleteDialog({ download, onClose, onDeleted }: DeleteProps) {
 
   return (
     <Modal
-      title="Remove download"
+      title="Remove Download"
       icon={<Trash2 size={16} />}
       onClose={onClose}
       width={460}
       footer={
         <>
           {error && <span className="foot-error" role="alert">{error}</span>}
-          <button className="btn" onClick={onClose} data-autofocus>Cancel</button>
-          <button className="btn btn-danger" onClick={confirm}>Remove</button>
+          <button type="button" className="btn" onClick={onClose} data-autofocus>
+            Cancel
+          </button>
+          <button type="button" className="btn btn-danger" onClick={confirm}>
+            Remove
+          </button>
         </>
       }
     >
-      <p className="confirm-text">Remove <strong>{download.filename}</strong> from the list?</p>
+      <p className="confirm-text">
+        Remove <strong>{download.filename}</strong> from the download list?
+      </p>
       {completed ? (
         <label className="toggle">
-          <input type="checkbox" checked={deleteFile} onChange={(e) => setDeleteFile(e.target.checked)} />
+          <input
+            type="checkbox"
+            checked={deleteFile}
+            onChange={(e) => setDeleteFile(e.target.checked)}
+          />
           <span>Also delete the downloaded file from disk</span>
         </label>
       ) : (
-        <p className="muted">Any partially downloaded data will be deleted.</p>
+        <p className="muted">Any partially downloaded temporary data will be deleted.</p>
       )}
+    </Modal>
+  )
+}
+
+/* ------------------------------------------------------------------ */
+
+interface CompleteProps {
+  download: Download
+  onClose: () => void
+  onOpenFile: (d: Download) => void
+  onShowInFolder: (d: Download) => void
+}
+
+export function DownloadCompleteDialog({
+  download,
+  onClose,
+  onOpenFile,
+  onShowInFolder,
+}: CompleteProps) {
+  const Icon = iconFor(download.filename)
+
+  return (
+    <Modal
+      title="Download Complete"
+      icon={<CheckCircle2 size={16} />}
+      onClose={onClose}
+      width={500}
+      footer={
+        <>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => {
+              onShowInFolder(download)
+              onClose()
+            }}
+          >
+            <FolderOpen size={14} /> Open Folder
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => {
+              onOpenFile(download)
+              onClose()
+            }}
+          >
+            <ExternalLink size={14} /> Open File
+          </button>
+          <button type="button" className="btn" onClick={onClose}>
+            Close
+          </button>
+        </>
+      }
+    >
+      <div className="complete-modal-content">
+        <div className="complete-icon-badge">
+          <Icon size={32} />
+        </div>
+        <div className="complete-info">
+          <strong>{download.filename}</strong>
+          <span>Size: {formatBytes(download.size)}</span>
+          <span className="complete-path">Saved to: {download.destination}</span>
+        </div>
+      </div>
     </Modal>
   )
 }

@@ -17,6 +17,11 @@ var (
 	ErrInvalidRequest = errors.New("invalid download request")
 	// ErrShuttingDown is returned when work is submitted during shutdown.
 	ErrShuttingDown = errors.New("download manager is shutting down")
+	// ErrNoSpace means the destination volume cannot hold the file.
+	ErrNoSpace = errors.New("not enough free space")
+	// ErrTooBigForFileSystem means the destination's file system cannot
+	// store a file this large (FAT32: 4 GiB − 1).
+	ErrTooBigForFileSystem = errors.New("file too large for the destination's file system")
 )
 
 // TransitionError describes a rejected state change.

@@ -111,7 +111,19 @@ func (m *Manager) execute(ctx context.Context, e *entry) error {
 }
 
 func (m *Manager) attempt(ctx context.Context, e *entry, headers http.Header, forceSingle bool) error {
-	meta, err := m.probe(ctx, e, headers)
+	// A fresh download's first request doubles as the probe and starts the
+	// transfer; a resumed one is probed first so its validators are checked
+	// before any byte is appended to existing data.
+	var (
+		meta  domain.RemoteMetadata
+		first *opened
+		err   error
+	)
+	if m.isFresh(e) {
+		meta, first, err = m.open(ctx, e, headers)
+	} else {
+		meta, err = m.probe(ctx, e, headers)
+	}
 	if err != nil {
 		return err
 	}
@@ -120,12 +132,13 @@ func (m *Manager) attempt(ctx context.Context, e *entry, headers http.Header, fo
 	}
 	d, err := m.applyMetadata(ctx, e, meta)
 	if err != nil {
+		first.close()
 		return err
 	}
 	if meta.RangeSupported && meta.Size > 0 {
-		err = m.transferSegmented(ctx, e, d, &meta, headers)
+		err = m.transferSegmented(ctx, e, d, &meta, headers, first)
 	} else {
-		err = m.transferStream(ctx, e, d, &meta, headers)
+		err = m.transferStream(ctx, e, d, &meta, headers, first)
 	}
 	if err != nil {
 		return err
@@ -140,13 +153,51 @@ func (m *Manager) probe(ctx context.Context, e *entry, headers http.Header) (dom
 	var meta domain.RemoteMetadata
 	err := m.withRetry(ctx, e, nil, func() (bool, error) {
 		var err error
-		meta, err = m.cfg.Prober.Probe(ctx, rawURL, headers)
+		meta, err = m.proberFor(e).Probe(ctx, rawURL, headers)
 		return false, err
 	})
 	if err != nil {
 		return meta, fmt.Errorf("metadata: %w", err)
 	}
 	return meta, nil
+}
+
+// isFresh reports whether nothing has been downloaded yet.
+func (m *Manager) isFresh(e *entry) bool {
+	m.mu.Lock()
+	downloaded, temp := e.d.Downloaded, e.d.TempPath
+	m.mu.Unlock()
+	return downloaded == 0 && !exists(temp)
+}
+
+// open sends the first request (with retries) and keeps its response open
+// for the transfer. The response is bound to its own context so an idle
+// timeout can abort it.
+func (m *Manager) open(ctx context.Context, e *entry, headers http.Header) (domain.RemoteMetadata, *opened, error) {
+	m.mu.Lock()
+	rawURL := e.d.URL
+	m.mu.Unlock()
+	var meta domain.RemoteMetadata
+	var op *opened
+	err := m.withRetry(ctx, e, nil, func() (bool, error) {
+		octx, cancel := context.WithCancelCause(ctx)
+		md, res, err := m.proberFor(e).Open(octx, rawURL, headers)
+		if err != nil {
+			cancel(nil)
+			return false, err
+		}
+		meta = md
+		if res != nil {
+			op = &opened{res: res, cancel: cancel}
+		} else {
+			cancel(nil)
+		}
+		return false, nil
+	})
+	if err != nil {
+		return meta, nil, fmt.Errorf("metadata: %w", err)
+	}
+	return meta, op, nil
 }
 
 // applyMetadata revalidates the representation, resets progress if it
@@ -183,7 +234,7 @@ func (m *Manager) applyMetadata(ctx context.Context, e *entry, meta domain.Remot
 				name = sanitized
 			}
 		}
-		name = filesystem.WithExtension(name, filesystem.ExtensionForMIME(meta.MIMEType))
+		name = filesystem.FitName(d.Destination, filesystem.WithExtension(name, filesystem.ExtensionForMIME(meta.MIMEType)))
 		if name != d.Filename {
 			d.Filename = m.reserveNameLocked(d.Destination, name, d.ID)
 			d.TempPath = filesystem.TempPath(d.Destination, d.Filename)
@@ -217,7 +268,15 @@ func (m *Manager) complete(ctx context.Context, e *entry, meta domain.RemoteMeta
 	if err = m.save(ctx, snap); err != nil {
 		return err
 	}
-	size, err := verifyFile(ctx, snap.TempPath, meta)
+	// Every byte is written: the file stops being sparse (clearing it
+	// allocates any holes, so only a complete file is cleared).
+	if meta.Size >= platform.SparseMinSize {
+		if f, ferr := os.OpenFile(snap.TempPath, os.O_RDWR, 0); ferr == nil {
+			platform.SetSparse(f, false)
+			_ = f.Close()
+		}
+	}
+	size, err := verifyFile(ctx, snap.TempPath, meta, snap.ExpectedChecksum)
 	if err != nil {
 		if errors.Is(err, ErrIntegrity) {
 			// Corrupt data must not be resumed; a retry starts clean.

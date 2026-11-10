@@ -33,19 +33,33 @@ wails build      # produces build/bin/Yellow Flash.exe (icon from build/appicon.
 
 ## Requirements
 
-- Go 1.26 or later. No cgo is needed: SQLite comes from the pure-Go `modernc.org/sqlite`.
+- Go 1.26 or later. No cgo is needed.
 - Docker, only to run the race detector on Windows hosts without a C toolchain.
 - For the desktop shell only: Node 22, the Wails v2 CLI, and on Linux GTK 3 and WebKitGTK 4.1.
+
+## Desktop app command line
+
+Only one Yellow Flash runs per data folder. Launching it again hands that launch's command line to the running app (or just brings its window to the front), using IDM's syntax:
+
+```sh
+"Yellow Flash.exe" /d https://example.com/file.iso            # opens Add URL with the link
+"Yellow Flash.exe" /d https://example.com/file.iso /p D:\dl /f a.iso /n   # adds and starts it, no dialog
+"Yellow Flash.exe" /d https://example.com/file.iso /a         # adds it without starting
+"Yellow Flash.exe" /s                                          # starts every waiting download
+"Yellow Flash.exe" /exit                                       # the running app saves and quits
+```
+
+Flags are case-insensitive and may also start with `-`. Set `YELLOWFLASH_DATA_DIR` to run a separate instance with its own list, for example in tests. A writable `data` folder next to the program turns on portable mode.
 
 ## Using the engine from the command line
 
 ```sh
 go run ./cmd/engine-test -dir ./downloads -c 8 https://example.com/file.iso
 
-# Keep state in SQLite so you can resume after Ctrl+C or a crash:
-go run ./cmd/engine-test -db state.db -dir ./downloads https://example.com/file.iso
-go run ./cmd/engine-test -db state.db -list
-go run ./cmd/engine-test -db state.db -resume <id>
+# Keep state in a JSON download list so you can resume after Ctrl+C or a crash:
+go run ./cmd/engine-test -db state/downloads.json -dir ./downloads https://example.com/file.iso
+go run ./cmd/engine-test -db state/downloads.json -list
+go run ./cmd/engine-test -db state/downloads.json -resume <id>
 ```
 
 Pressing Ctrl+C pauses the download and saves progress. When a download completes, the command prints the file's path and SHA-256. Other flags: `-name`, `-retries`, `-header "Name: value"` (repeatable), `-allow-private=false` (blocks loopback and private-network destinations), and `-v` (debug logging).
@@ -66,7 +80,7 @@ GOOS=linux   go build ./internal/... ./cmd/...
 GOOS=windows go build ./internal/... ./cmd/...
 ```
 
-The integration suite in `tests/integration` runs the service, engine, and SQLite together against a configurable `httptest` server. That server can withhold `HEAD` or range support, send bad `Content-Range` headers, answer with 404, 416, 429, or 503, send real TCP resets, stall mid-body, redirect, change the `ETag`, and simulate a process crash. Payloads are deterministic and checked by SHA-256.
+The integration suite in `tests/integration` runs the service, engine, and JSON store together against a configurable `httptest` server. That server can withhold `HEAD` or range support, send bad `Content-Range` headers, answer with 404, 416, 429, or 503, send real TCP resets, stall mid-body, redirect, change the `ETag`, and simulate a process crash. Payloads are deterministic and checked by SHA-256.
 
 ## Architecture
 
@@ -82,13 +96,13 @@ internal/
                            allocator, segment planning, retry, progress, resume, verifier
   infrastructure/network   hardened HTTP client (SSRF dial guard), prober, Content-Range parsing
   infrastructure/filesystem filename sanitising, temp files, no-overwrite publishing
-  infrastructure/persistence/sqlite   migrations + repositories (domain.Store)
+  infrastructure/persistence/jsonstore downloads.json + resume/<id>.json (domain.Store)
   infrastructure/persistence/memory   non-durable domain.Store
   platform                 SecretStore interface (OS keychains arrive in Phase 6)
 tests/integration          end-to-end scenarios
 ```
 
-Dependencies point inward. The engine imports only domain types, the leaf `events` and `platform` packages, and the network and filesystem helpers. It never imports SQLite, Wails, or any OS-specific API. Persistence is injected as `domain.Store`.
+Dependencies point inward. The engine imports only domain types, the leaf `events` and `platform` packages, and the network and filesystem helpers. It never imports the store, Wails, or any OS-specific API. Persistence is injected as `domain.Store`.
 
 ### Durability rules
 
@@ -116,3 +130,11 @@ The Wails shell (`main.go`, `app.go`, `frontend/`) compiles against the engine b
 ```sh
 docker build -f build/linux/Dockerfile -t downwell-linux:0.1.0 .   # builds /out/downwell_0.1.0_amd64.deb
 ```
+
+## License
+
+Yellow Flash is free software, licensed under the GNU General Public License v3.0 or later
+([LICENSE](LICENSE)). Parts of its backend are being ported from
+[Mister Download Manager](https://github.com/anefzaoui/misterdownloadmanager) © 2026 Ahmed
+Nefzaoui and contributors (GPL-3.0-or-later); see [NOTICE.md](NOTICE.md) for credits and
+third-party licences.

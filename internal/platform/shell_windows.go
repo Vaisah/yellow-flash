@@ -20,6 +20,17 @@ func revealPath(path string) error {
 	return start(cmd)
 }
 
+// HideConsole keeps a console program run from the app (the native host's
+// --register) from opening a console window.
+func HideConsole(cmd *exec.Cmd) {
+	const createNoWindow = 0x08000000
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.HideWindow = true
+	cmd.SysProcAttr.CreationFlags |= createNoWindow
+}
+
 // start launches without waiting: explorer.exe exits with code 1 even on
 // success, so its exit status is meaningless.
 func start(cmd *exec.Cmd) error {
