@@ -74,6 +74,8 @@ func TestMain(m *testing.M) {
 		}
 	case "ytdlp", "ytdlp-slow":
 		fakeYtDlp(os.Getenv(fakeModeEnv) == "ytdlp-slow")
+	case "gallery-dl":
+		fakeGalleryDl()
 	case "args":
 		for _, a := range os.Args[1:] {
 			fmt.Println(a)
