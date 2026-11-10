@@ -65,7 +65,7 @@ The layout follows a classic download manager without copying IDM: a toolbar, a 
 | Crash recovery: active → PAUSED, segments clamped to the temp file, revalidated on resume | `manager.go` `Recover`, `resume.go` | Integration 19a/19b |
 | DownloadService on a `DownloadPort` interface | `internal/application/download` | `service_test.go` (fake port) |
 | SSRF guard at dial time (covers redirects and DNS rebinding); URL and filename validation | `network/client.go`, `filesystem/paths.go` | `TestPrivateDestinationsBlockedAtDialTime`, integration |
-| CLI runnable without a UI | `cmd/engine-test` | Manual smoke test (below) |
+| CLI runnable without a UI | `cmd/yellowflash-cli` (replaced `cmd/engine-test`) | `cmd/yellowflash-cli/main_test.go` |
 
 ### The 20 required integration scenarios (`tests/integration/download_test.go`)
 

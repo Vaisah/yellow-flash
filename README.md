@@ -51,18 +51,22 @@ Only one Yellow Flash runs per data folder. Launching it again hands that launch
 
 Flags are case-insensitive and may also start with `-`. Set `YELLOWFLASH_DATA_DIR` to run a separate instance with its own list, for example in tests. A writable `data` folder next to the program turns on portable mode.
 
-## Using the engine from the command line
+## The command line
+
+`yellowflash-cli` downloads without the window, and asks the running app through its automation API:
 
 ```sh
-go run ./cmd/engine-test -dir ./downloads -c 8 https://example.com/file.iso
-
-# Keep state in a JSON download list so you can resume after Ctrl+C or a crash:
-go run ./cmd/engine-test -db state/downloads.json -dir ./downloads https://example.com/file.iso
-go run ./cmd/engine-test -db state/downloads.json -list
-go run ./cmd/engine-test -db state/downloads.json -resume <id>
+go run ./cmd/yellowflash-cli get https://example.com/file.iso -o ./downloads -c 8
+go run ./cmd/yellowflash-cli list                  # its own downloads (kept in <data>/cli)
+go run ./cmd/yellowflash-cli resume <id>           # after Ctrl+C or a failure
+go run ./cmd/yellowflash-cli api on                # once: let programs ask the running app
+go run ./cmd/yellowflash-cli status                # the app's downloads, as JSON
+go run ./cmd/yellowflash-cli help                  # every command: videos, galleries, torrents, pairing…
 ```
 
-Pressing Ctrl+C pauses the download and saves progress. When a download completes, the command prints the file's path and SHA-256. Other flags: `-name`, `-retries`, `-header "Name: value"` (repeatable), `-allow-private=false` (blocks loopback and private-network destinations), and `-v` (debug logging).
+Ctrl+C pauses a download and saves progress; a finished one prints its path and SHA-256. `--json` prints one JSON object per line for programs. Torrents need `--proxy socks5://…`: peers never see this computer's address.
+
+`yellowflash-mcp` is an MCP server for AI assistants (Claude, Cursor, VS Code): the assistant starts it and, through the app's automation API, lists, adds, pauses, resumes and removes downloads.
 
 ## Tests
 
@@ -85,7 +89,8 @@ The integration suite in `tests/integration` runs the service, engine, and JSON 
 ## Architecture
 
 ```
-cmd/engine-test            CLI entry point (no UI)
+cmd/yellowflash-cli        command line (no UI) and the app's automation API
+cmd/yellowflash-mcp        MCP server for AI assistants
 app.go, main.go            Wails desktop shell (Phase 2)
 internal/
   domain/download          Download/Segment model, state machine, errors, repository ports
