@@ -11,6 +11,7 @@ import (
 
 	domain "github.com/vaisah/internal/domain/download"
 	"github.com/vaisah/internal/infrastructure/filesystem"
+	"github.com/vaisah/internal/infrastructure/network"
 	"github.com/vaisah/internal/platform"
 )
 
@@ -99,6 +100,10 @@ func (m *Manager) execute(ctx context.Context, e *entry) error {
 		switch {
 		case errors.Is(err, errRangeIgnored):
 			forceSingle = true
+		case errors.Is(err, errLinkExpired):
+			// The service is asked again; the bytes on disk stay.
+			m.cfg.Logger.Info("asking the service again", "id", d.ID)
+			continue
 		case errors.Is(err, domain.ErrRemoteChanged):
 		default:
 			return err
@@ -130,6 +135,11 @@ func (m *Manager) attempt(ctx context.Context, e *entry, headers http.Header, fo
 	if forceSingle {
 		meta.RangeSupported = false
 	}
+	// Through a service, the transfer asks its direct link without the
+	// host's headers.
+	if meta.Through != "" {
+		headers = http.Header{}
+	}
 	d, err := m.applyMetadata(ctx, e, meta)
 	if err != nil {
 		first.close()
@@ -140,6 +150,13 @@ func (m *Manager) attempt(ctx context.Context, e *entry, headers http.Header, fo
 	} else {
 		err = m.transferStream(ctx, e, d, &meta, headers, first)
 	}
+	if err != nil && meta.Through != "" {
+		err = hideLink(err, meta.URL)
+		var se *network.StatusError
+		if errors.As(err, &se) && expiredStatus[se.Code] {
+			return fmt.Errorf("%w: %w", errLinkExpired, err)
+		}
+	}
 	if err != nil {
 		return err
 	}
@@ -148,12 +165,19 @@ func (m *Manager) attempt(ctx context.Context, e *entry, headers http.Header, fo
 
 func (m *Manager) probe(ctx context.Context, e *entry, headers http.Header) (domain.RemoteMetadata, error) {
 	m.mu.Lock()
-	rawURL := e.d.URL
+	rawURL, id := e.d.URL, e.d.ID
 	m.mu.Unlock()
 	var meta domain.RemoteMetadata
 	err := m.withRetry(ctx, e, nil, func() (bool, error) {
-		var err error
-		meta, err = m.proberFor(e).Probe(ctx, rawURL, headers)
+		target, hdr, via, err := m.source(ctx, id, rawURL, headers)
+		if err != nil {
+			return false, err
+		}
+		meta, err = m.proberFor(e).Probe(ctx, target, hdr)
+		via.apply(&meta)
+		if err != nil && via != nil {
+			err = hideLink(err, target)
+		}
 		return false, err
 	})
 	if err != nil {
@@ -175,17 +199,25 @@ func (m *Manager) isFresh(e *entry) bool {
 // timeout can abort it.
 func (m *Manager) open(ctx context.Context, e *entry, headers http.Header) (domain.RemoteMetadata, *opened, error) {
 	m.mu.Lock()
-	rawURL := e.d.URL
+	rawURL, id := e.d.URL, e.d.ID
 	m.mu.Unlock()
 	var meta domain.RemoteMetadata
 	var op *opened
 	err := m.withRetry(ctx, e, nil, func() (bool, error) {
-		octx, cancel := context.WithCancelCause(ctx)
-		md, res, err := m.proberFor(e).Open(octx, rawURL, headers)
+		target, hdr, via, err := m.source(ctx, id, rawURL, headers)
 		if err != nil {
-			cancel(nil)
 			return false, err
 		}
+		octx, cancel := context.WithCancelCause(ctx)
+		md, res, err := m.proberFor(e).Open(octx, target, hdr)
+		if err != nil {
+			cancel(nil)
+			if via != nil {
+				err = hideLink(err, target)
+			}
+			return false, err
+		}
+		via.apply(&md)
 		meta = md
 		if res != nil {
 			op = &opened{res: res, cancel: cancel}
@@ -206,6 +238,11 @@ func (m *Manager) open(ctx context.Context, e *entry, headers http.Header) (doma
 func (m *Manager) applyMetadata(ctx context.Context, e *entry, meta domain.RemoteMetadata) (*domain.Download, error) {
 	m.mu.Lock()
 	changed := representationChanged(e.d, meta)
+	if meta.Through != "" {
+		// Each unlock may name another of the service's servers, with its
+		// own ETag: the same file is the same size (as MDM checks it).
+		changed = e.d.Size >= 0 && meta.Size >= 0 && e.d.Size != meta.Size
+	}
 	status, id := e.d.Status, e.d.ID
 	m.mu.Unlock()
 	if status != domain.Initializing && status != domain.Downloading {
@@ -241,6 +278,9 @@ func (m *Manager) applyMetadata(ctx context.Context, e *entry, meta domain.Remot
 		}
 	}
 	d.FinalURL, d.Size, d.MIMEType = meta.URL, meta.Size, meta.MIMEType
+	if meta.Through != "" {
+		d.FinalURL = d.URL // the direct link is never stored
+	}
 	d.ETag, d.LastModified, d.RangeSupported = meta.ETag, meta.LastModified, meta.RangeSupported
 	if d.StartedAt.IsZero() {
 		d.StartedAt = time.Now().UTC()

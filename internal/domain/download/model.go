@@ -129,6 +129,11 @@ type RemoteMetadata struct {
 	RangeSupported bool   `json:"rangeSupported"`
 	// Checksum is the strongest whole-file hash the server announced.
 	Checksum Checksum `json:"checksum"`
+	// Through names the service account the file came through (a debrid
+	// service); URL is then its direct link, which is never stored.
+	Through string `json:"-"`
+	// MaxConnections is the most connections the source allows (0: no cap).
+	MaxConnections int `json:"-"`
 }
 
 // LinkInfo previews what a link points to, before a download is created.

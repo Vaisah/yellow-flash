@@ -85,6 +85,9 @@ type Config struct {
 	// injected Client (tests), that client and its prober.
 	RestrictedClient network.Doer
 	RestrictedProber Prober
+	// Unlockers gives a link its service account (debrid), asked on every
+	// attempt; nil: every link is downloaded directly.
+	Unlockers Unlockers
 }
 
 // BytesReceived counts every byte the downloads have received so far.
@@ -401,9 +404,20 @@ func (m *Manager) Inspect(ctx context.Context, rawURL string, headers map[string
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	meta, err := m.cfg.Prober.Probe(ctx, u.String(), buildHeaders(public, secret))
+	target, hdr, via, err := m.source(ctx, "", u.String(), buildHeaders(public, secret))
 	if err != nil {
 		return nil, err
+	}
+	meta, err := m.cfg.Prober.Probe(ctx, target, hdr)
+	if err != nil {
+		if via != nil {
+			err = hideLink(err, target)
+		}
+		return nil, err
+	}
+	via.apply(&meta)
+	if meta.Through != "" {
+		meta.URL = u.String() // the direct link is never shown
 	}
 	raw := meta.Filename
 	if raw == "" {
