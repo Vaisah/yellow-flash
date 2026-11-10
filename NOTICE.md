@@ -27,6 +27,11 @@ and the parts that read MDM's Rust sources read the Go ports instead. Each JavaS
 with a header saying so. The extension's icons are made from Yellow Flash's own app icon
 (`build/appicon.png`), not Mister Download Manager's.
 
+The remote control's page (`internal/remote/web/`: `index.html`, `app.js`, `app.css`,
+`manifest.webmanifest`) is Mister Download Manager's, modified for Yellow Flash: its name and the
+key its token is kept under are changed. Each file starts with a header saying so. Its icon
+(`icon.png`) is Yellow Flash's own app icon, scaled down.
+
 ## Go dependencies added for the port
 
 | Module | Licence | Used for | Since |
