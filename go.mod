@@ -5,6 +5,7 @@ go 1.26.6
 require (
 	github.com/anacrolix/torrent v1.61.0
 	github.com/dop251/goja v0.0.0-20261025165251-a8d1dbc7cfe7
+	github.com/godbus/dbus/v5 v5.1.0
 	github.com/google/uuid v1.6.0
 	github.com/wailsapp/wails/v2 v2.15.0
 	golang.org/x/net v0.56.0
@@ -50,7 +51,6 @@ require (
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/go-sourcemap/sourcemap v2.1.3+incompatible // indirect
-	github.com/godbus/dbus/v5 v5.1.0 // indirect
 	github.com/google/btree v1.1.2 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/pprof v0.0.0-20230207041349-798e818bf904 // indirect

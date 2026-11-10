@@ -50,6 +50,7 @@ key its token is kept under are changed. Each file starts with a header saying s
 | Required by anacrolix/torrent, BSD | BSD-3-Clause, BSD-2-Clause | BSD-3-Clause: `bahlo/generic-list-go`, `bradfitz/iter`, `edsrzf/mmap-go`, `google/go-cmp`, `google/uuid`, `spaolacci/murmur3`, `wlynxg/anet`, `golang.org/x/crypto`, `x/exp`, `x/sync`, `x/text`; BSD-2-Clause: `gorilla/websocket`, `pkg/errors` | port step 5b (`torrent`) |
 | Required by anacrolix/torrent, ISC | ISC | `davecgh/go-spew` | port step 5b (`torrent`) |
 | `rsc.io/qr` v0.2.0 | BSD-3-Clause | The remote control's pairing QR code, drawn in a terminal (`api_app.go`, `yellowflash-cli pair`) | port step 7a (automation API) |
+| `github.com/godbus/dbus/v5` v5.1.0 | BSD-2-Clause | The Linux keychain: the freedesktop Secret Service over D-Bus (`internal/platform/keychain_linux.go`), where debrid sign-ins are kept; it was already an indirect dependency via Wails | port step 8d (keychain) |
 
 ## Third-party data and assets
 
