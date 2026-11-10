@@ -23,6 +23,7 @@ import (
 	"github.com/vaisah/internal/infrastructure/persistence/jsonstore"
 	"github.com/vaisah/internal/ipc"
 	"github.com/vaisah/internal/platform"
+	"github.com/vaisah/internal/remote"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -52,6 +53,10 @@ type App struct {
 	media mediaJobs
 	// torrents holds the torrent session and list.
 	torrents torrentHost
+	// remote is the remote control (set at startup); speeds are the
+	// downloads' last speeds, for its list.
+	remote *remote.Remote
+	speeds speeds
 
 	// Commands from the IPC channel wait here until the UI is ready.
 	commands chan ipc.Incoming
@@ -115,6 +120,7 @@ func (a *App) Startup(ctx context.Context) {
 	publisher := events.PublisherFunc(func(e events.Event) {
 		runtime.EventsEmit(ctx, "downloads:updated", e.Download)
 		if e.Type == events.ProgressUpdated {
+			a.speeds.set(e.Progress.DownloadID, e.Progress.Speed)
 			runtime.EventsEmit(ctx, "downloads:progress", e.Progress)
 		} else if r := a.queues.Load(); r != nil {
 			r.Notify() // a download changed: its queue may start the next one
@@ -165,6 +171,7 @@ func (a *App) Startup(ctx context.Context) {
 	go cap.Run(qctx)
 	go a.registerBrowserHost(ctx)
 	go a.resumeTorrents()
+	a.startRemote()
 }
 
 // queueDone does what a finished queue's schedule asks.
@@ -188,6 +195,9 @@ func (a *App) queueDone(ctx context.Context, q queue.Queue) {
 
 // Shutdown pauses active downloads, persisting progress, then closes the DB.
 func (a *App) Shutdown(ctx context.Context) {
+	if a.remote != nil {
+		a.remote.Stop()
+	}
 	a.stopCommands()
 	if a.stopQueues != nil {
 		a.stopQueues()

@@ -72,8 +72,14 @@ func (a *App) stopCommands() {
 // dispatch runs one command.
 func (a *App) dispatch(ctx context.Context, in ipc.Incoming) {
 	cmd := in.Cmd
+	// A paired device's command (the remote control) is answered here; the
+	// automation API itself (queries and actions from other programs) is
+	// not offered yet.
+	if in.Reply != nil && cmd.Remote {
+		a.answerRemote(ctx, in)
+		return
+	}
 	if in.Reply != nil {
-		// The automation API (queries and actions) is not offered yet.
 		in.Reply <- ipc.Line(ipc.ErrorAnswer{Error: "the automation API is off", Code: ipc.APIOff})
 		return
 	}

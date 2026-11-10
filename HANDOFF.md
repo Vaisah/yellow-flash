@@ -255,7 +255,7 @@ is at `C:\Users\Vaisah\Videos\Go\misterdownloadmanager-main`, version 0.5.1, GPL
 | 3 ✅ | `crates/nmhost` + `extension/`, `ipc`'s `browsers.rs`, `capture.rs`, `extension.rs` | `cmd/nm-host`, `extension/`, `internal/browser`, `browser_app.go` | **Done 2026-11-09.** See "Step 3 notes". |
 | 4 ✅ | `crates/tools` | `internal/tools`, `tools_app.go` | **Done 2026-11-10** (backend; the windows are UI work). See "Step 4 notes". |
 | 5 ✅ | `crates/torrent`, and `crates/app/src/torrents.rs`'s list, sharing limits and blocklist | `internal/torrent`, `torrents_app.go` | **Done 2026-11-10** (backend; the torrent windows are UI work). See "Step 5 notes". |
-| 6 | `crates/remote` | `internal/remote` | Phone or LAN remote control over HTTPS with pairing. |
+| 6 ✅ | `crates/remote`, and the app's answers to it | `internal/remote`, `remote_app.go` | **Done 2026-11-10** (backend; Options → Remote is UI work). See "Step 6 notes". |
 | 7 | `crates/cli`, `crates/mcp` | `cmd/engine-test` → `cmd/yellowflash-cli`, `cmd/yellowflash-mcp` | Automation API. |
 | 8 | `crates/debrid`, `crates/extract`, `crates/geo`, `crates/crash` | `internal/...` | Debrid services, archive extraction, server location, crash reports. |
 | 9 | `crates/labserver` | `tests/lab` | Their fault-injecting HTTP/FTP server; merge it with our `fileServer`. |
@@ -469,6 +469,23 @@ Three commits (5a rules, 5b session, 5c list and app). MDM wraps librqbit; we wr
 - Commands: a magnet, a `.torrent` path or remote control's `.torrent` bytes is looked up, then opens that window; with `/n` or `/a` it is added whole to `/p` (or the download folder), started or paused.
 - Not ported: MDM's piece order (first and last pieces first, for previews), per-torrent speed limits, the network-adapter bind, debrid hand-off (step 8), Windows file associations (packaging, Phase 6), stopping the session when idle, and fetching `.torrent` files from web addresses (a browser download of one is an ordinary download for now).
 - Verified on Windows: a loopback seeder and leecher (all files, chosen files, pause and resume, a file deleted while paused, a magnet's metadata from the seeder), and the app's flow from look-up to removal. The Linux `-race` run is still to do with `internal/tools` (Docker wasn't running).
+
+### Step 6 notes (remote control): done 2026-11-10
+
+Two commits (6a the package, 6b the app). Everything is MDM's design; the docs are its `docs/remote-control.md`.
+
+**The package** (`internal/remote`)
+- Off by default. When on, one HTTPS listener per local network address (10/8, 172.16/12, 192.168/16, fc00::/7), never 0.0.0.0 or ::; or an address or adapter the person names. Addresses are watched every 10 s and the listeners follow them. Default port 8463.
+- A self-signed certificate (ECDSA P-256, Go's standard crypto, no new dependency), made once and kept 800 days in `<data>/remote/` (`cert.der`, `key.der`, `cert.json`), owner-only; its SHA-256 fingerprint is shown to compare with the phone's.
+- Pairing: an 8-digit code, ten minutes, one device; five paced tries (one a second) per address, twenty in all. Paired devices are in `devices.json` as token hashes (SHA-256) only; removing one refuses it at its next request.
+- Every request: Host must be an address, localhost, this computer's name or a name the person added (DNS rebinding); `/api/` requests must come from the page's own origin (or the extension's) and not be marked cross-site; answers forbid framing, sniffing and caching. Plain `http://` is redirected to `https://`. At most 64 connections, 10 s handshakes, 60 s idle.
+- The page (`internal/remote/web/`, MDM's, rebranded) is embedded. Its texts come through `remote.Texts`; the app passes none yet (English).
+
+**The app** (`remote_app.go`)
+- Each request becomes an `ipc.Command` marked `Remote` (a field never read from an IPC line, so no local program can claim it) through `ipc.Sink`; `dispatch` answers those with `answerRemote`. Other programs' queries still get `api-off` (step 7).
+- A paired device lists, adds, pauses, starts and removes downloads and torrents, and starts and stops queues. Its list has no paths. A `.torrent` comes as its bytes, never a path on this computer; magnets and `.torrent` bytes are looked up in the background (answer `pending`). Torrents are `torrent:<hash>` in the list.
+- Bindings: `GetRemoteSettings`, `SaveRemoteSettings` (`remote.Config`: on, port, listen, hosts), `GetRemoteInfo` (state, URLs, fingerprint, devices), `RemoveRemoteDevice`, `StartRemotePairing`, `GetRemotePairing`, `StopRemotePairing`. Event `remote:changed` when a device pairs or leaves.
+- Not ported: categories in the list (Yellow Flash has none yet), the page's translations, a QR code of the pairing address, and MDM's per-download `remote` handling of adapters and kill switches (not ported either).
 
 Not ported: `crates/app` (their egui desktop UI), since Yellow Flash's UI is Wails + React. Port
 its *behaviour* (queues, scheduler, settings) into Go services and the React UI as each feature
