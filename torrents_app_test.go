@@ -28,13 +28,19 @@ func torrentApp(t *testing.T) *App {
 		a.stopTorrents()
 		_ = store.Close()
 	})
-	// Nothing reaches out: no DHT, no router.
-	s := defaultTorrentSettings()
-	s.DHT, s.UPnP = false, false
-	if _, err := a.SaveTorrentSettings(s); err != nil {
+	// Torrents need a SOCKS5 proxy; nothing here reaches a peer, so none
+	// needs to answer.
+	setProxy(t, a, "fixed", "socks5://127.0.0.1:1")
+	return a
+}
+
+func setProxy(t *testing.T, a *App, mode, proxy string) {
+	t.Helper()
+	n := defaultNetworkSettings()
+	n.ProxyMode, n.ProxyURL = mode, proxy
+	if _, err := a.SaveNetworkSettings(n); err != nil {
 		t.Fatal(err)
 	}
-	return a
 }
 
 // seed writes a folder "Pack" of two files in dir, and its .torrent.
@@ -71,10 +77,10 @@ func seed(t *testing.T, dir string) string {
 func TestTorrentSettingsAreChecked(t *testing.T) {
 	a := torrentApp(t)
 	got := a.GetTorrentSettings()
-	if got.DHT || got.UPnP || !got.Incoming || got.KeepSharing || got.StopRatio != 200 || got.StopMinutes != 1440 {
+	if got.KeepSharing || got.StopRatio != 200 || got.StopMinutes != 1440 {
 		t.Errorf("%+v", got)
 	}
-	for _, bad := range []TorrentSettings{{Port: -1}, {Port: 70000}, {UploadLimitKB: -1}, {Blocklist: "file:///etc/hosts"}, {Blocklist: "not a url"}} {
+	for _, bad := range []TorrentSettings{{UploadLimitKB: -1}, {StopRatio: -1}, {Blocklist: "file:///etc/hosts"}, {Blocklist: "not a url"}} {
 		if _, err := a.SaveTorrentSettings(bad); err == nil {
 			t.Errorf("%+v saved", bad)
 		}
@@ -199,21 +205,39 @@ func TestATorrentFromLookUpToRemoval(t *testing.T) {
 	}
 }
 
-func TestTorrentsAreRefusedBehindAFixedProxy(t *testing.T) {
+// Peers never see this computer's address: without the connection
+// settings' SOCKS5 proxy, torrents don't run; taking it away stops them.
+func TestTorrentsRunOnlyThroughASocksProxy(t *testing.T) {
 	a := torrentApp(t)
-	n := defaultNetworkSettings()
-	n.ProxyMode, n.ProxyURL = "fixed", "http://127.0.0.1:3128"
-	if _, err := a.SaveNetworkSettings(n); err != nil {
-		t.Fatal(err)
-	}
 	p, err := a.LookUpTorrent(seed(t, t.TempDir()))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.AddTorrent(AddTorrentRequest{Hash: p.Hash}); !errors.Is(err, torrent.ErrProxy) {
-		t.Error(err)
+	for _, c := range []struct {
+		mode, proxy string
+		want        error
+	}{{"system", "", torrent.ErrNoProxy}, {"none", "", torrent.ErrNoProxy}, {"fixed", "http://127.0.0.1:3128", torrent.ErrProxyKind}} {
+		setProxy(t, a, c.mode, c.proxy)
+		if _, err := a.AddTorrent(AddTorrentRequest{Hash: p.Hash, Paused: true}); !errors.Is(err, c.want) {
+			t.Errorf("%s %s: %v", c.mode, c.proxy, err)
+		}
+		if _, err := a.LookUpTorrent("magnet:?xt=urn:btih:" + p.Hash); !errors.Is(err, c.want) {
+			t.Errorf("magnet, %s %s: %v", c.mode, c.proxy, err)
+		}
 	}
-	if _, err := a.LookUpTorrent("magnet:?xt=urn:btih:" + p.Hash); !errors.Is(err, torrent.ErrProxy) {
+
+	setProxy(t, a, "fixed", "socks5h://127.0.0.1:1")
+	if _, err := a.AddTorrent(AddTorrentRequest{Hash: p.Hash, Paused: true}); err != nil {
+		t.Fatal(err)
+	}
+	if a.runningTorrents() == nil {
+		t.Fatal("not running")
+	}
+	setProxy(t, a, "none", "")
+	if a.runningTorrents() != nil {
+		t.Error("still running without a proxy")
+	}
+	if err := a.ResumeTorrent(p.Hash); !errors.Is(err, torrent.ErrNoProxy) {
 		t.Error(err)
 	}
 }

@@ -5,16 +5,20 @@
 package torrent
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"math/rand/v2"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -69,9 +73,10 @@ func marshal(t *testing.T, info metainfo.Info, trackers ...string) []byte {
 	return b.Bytes()
 }
 
+// session is a direct session on loopback (the tests' seeders).
 func session(t *testing.T) *Torrents {
 	t.Helper()
-	cfg := NewConfig(t.TempDir())
+	cfg := NewConfig(t.TempDir(), "")
 	cfg.Offline = true
 	s, err := Start(cfg)
 	if err != nil {
@@ -79,6 +84,112 @@ func session(t *testing.T) *Torrents {
 	}
 	t.Cleanup(s.Stop)
 	return s
+}
+
+// proxied is a session through px, as every real one is (peers on this
+// computer allowed, for the tests' swarm).
+func proxied(t *testing.T, px *socksServer) *Torrents {
+	t.Helper()
+	cfg := NewConfig(t.TempDir(), "socks5://"+px.ln.Addr().String())
+	cfg.Offline = true
+	s, err := Start(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(s.Stop)
+	if s.ListenPort() != 0 {
+		t.Error("a proxied session listens")
+	}
+	return s
+}
+
+// socksServer is a minimal SOCKS5 proxy (no authentication, CONNECT only)
+// that records where it was asked to connect.
+type socksServer struct {
+	ln      net.Listener
+	mu      sync.Mutex
+	targets []string
+}
+
+func startSocks(t *testing.T) *socksServer {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	px := &socksServer{ln: ln}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go px.serve(c)
+		}
+	}()
+	return px
+}
+
+func (px *socksServer) dialled() []string {
+	px.mu.Lock()
+	defer px.mu.Unlock()
+	return slices.Clone(px.targets)
+}
+
+func (px *socksServer) serve(c net.Conn) {
+	defer c.Close()
+	r := bufio.NewReader(c)
+	head := make([]byte, 2)
+	if _, err := io.ReadFull(r, head); err != nil || head[0] != 5 {
+		return
+	}
+	if _, err := io.ReadFull(r, make([]byte, head[1])); err != nil {
+		return
+	}
+	c.Write([]byte{5, 0})
+	req := make([]byte, 4)
+	if _, err := io.ReadFull(r, req); err != nil || req[1] != 1 {
+		return
+	}
+	var host string
+	switch req[3] {
+	case 1, 4:
+		ip := make([]byte, map[byte]int{1: 4, 4: 16}[req[3]])
+		if _, err := io.ReadFull(r, ip); err != nil {
+			return
+		}
+		host = net.IP(ip).String()
+	case 3:
+		n, err := r.ReadByte()
+		if err != nil {
+			return
+		}
+		name := make([]byte, n)
+		if _, err := io.ReadFull(r, name); err != nil {
+			return
+		}
+		host = string(name)
+	default:
+		return
+	}
+	port := make([]byte, 2)
+	if _, err := io.ReadFull(r, port); err != nil {
+		return
+	}
+	target := net.JoinHostPort(host, strconv.Itoa(int(port[0])<<8|int(port[1])))
+	px.mu.Lock()
+	px.targets = append(px.targets, target)
+	px.mu.Unlock()
+	up, err := net.Dial("tcp", target)
+	if err != nil {
+		c.Write([]byte{5, 5, 0, 1, 0, 0, 0, 0, 0, 0})
+		return
+	}
+	defer up.Close()
+	c.Write([]byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0})
+	go func() { io.Copy(up, r); up.Close() }()
+	io.Copy(c, up)
 }
 
 func waitFor(t *testing.T, what string, ok func() bool) {
@@ -163,11 +274,28 @@ func TestTorrentFilesAreLimited(t *testing.T) {
 	}
 }
 
-func TestAProxyRefusesTorrents(t *testing.T) {
-	cfg := NewConfig(t.TempDir())
-	cfg.Proxy = "socks5://127.0.0.1:9050"
-	if _, err := Start(cfg); !errors.Is(err, ErrProxy) {
+// Peers never see this computer's address: no proxy, or one that can't
+// carry peer connections, and torrents are refused.
+func TestTorrentsNeedASocksProxy(t *testing.T) {
+	if _, err := Start(NewConfig(t.TempDir(), "")); !errors.Is(err, ErrNoProxy) {
 		t.Error(err)
+	}
+	for _, bad := range []string{"http://127.0.0.1:3128", "https://p.example:443", "socks4://127.0.0.1:1080", "socks5://", "not a url"} {
+		if _, err := Start(NewConfig(t.TempDir(), bad)); !errors.Is(err, ErrProxyKind) {
+			t.Errorf("%s: %v", bad, err)
+		}
+	}
+	// A password in the address is never shown.
+	if _, err := Start(NewConfig(t.TempDir(), "http://user:secret@127.0.0.1:3128")); err == nil || strings.Contains(err.Error(), "secret") {
+		t.Error(err)
+	}
+	s, err := Start(NewConfig(t.TempDir(), "socks5h://user:secret@127.0.0.1:1080"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Stop()
+	if s.ListenPort() != 0 || len(s.cl.ListenAddrs()) != 0 {
+		t.Error("it listens")
 	}
 }
 
@@ -196,7 +324,8 @@ func TestMagnetPeersOnTheLocalNetworkAreDropped(t *testing.T) {
 func TestALeecherGetsTheFilesFromASeeder(t *testing.T) {
 	src := t.TempDir()
 	b := makeTorrent(t, src, 100000, 3000)
-	seeder, leecher := session(t), session(t)
+	px := startSocks(t)
+	seeder, leecher := session(t), proxied(t, px)
 	hash, err := seeder.Add(b, src, nil, false)
 	if err != nil {
 		t.Fatal(err)
@@ -223,6 +352,17 @@ func TestALeecherGetsTheFilesFromASeeder(t *testing.T) {
 	st, _ := leecher.Stats(strings.ToUpper(hash))
 	if st.Done != 103000 || st.Total != 103000 || len(st.FileDone) != 2 {
 		t.Errorf("%+v", st)
+	}
+	// The seeder was reached through the proxy, and the leecher kept no
+	// UDP tracker (UDP would go around the proxy).
+	if !slices.Contains(px.dialled(), addr(seeder)) {
+		t.Errorf("not through the proxy: %q", px.dialled())
+	}
+	leecher.mu.Lock()
+	leecherTrackers := TrackersListed(leecher.items[hash].torrent)
+	leecher.mu.Unlock()
+	if len(leecherTrackers) != 0 {
+		t.Errorf("%q", leecherTrackers)
 	}
 	for _, f := range []string{"f0.bin", "f1.bin"} {
 		want, _ := os.ReadFile(filepath.Join(src, "Pack", "sub", f))
@@ -292,7 +432,8 @@ func TestOnlyTheFilesChosen(t *testing.T) {
 	src := t.TempDir()
 	// Each file a whole number of pieces, so none shares one.
 	b := makeTorrent(t, src, 64<<10, 32<<10)
-	seeder, leecher := session(t), session(t)
+	px := startSocks(t)
+	seeder, leecher := session(t), proxied(t, px)
 	hash, _ := seeder.Add(b, src, nil, false)
 	waitFor(t, "the seeder", func() bool { return phase(seeder, hash) == Finished })
 
@@ -322,7 +463,8 @@ func TestOnlyTheFilesChosen(t *testing.T) {
 func TestAMagnetsFileListComesFromThePeers(t *testing.T) {
 	src := t.TempDir()
 	b := makeTorrent(t, src, 20000)
-	seeder, asker := session(t), session(t)
+	px := startSocks(t)
+	seeder, asker := session(t), proxied(t, px)
 	hash, _ := seeder.Add(b, src, nil, false)
 	waitFor(t, "the seeder", func() bool { return phase(seeder, hash) == Finished })
 

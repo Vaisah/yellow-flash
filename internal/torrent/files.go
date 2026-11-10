@@ -42,6 +42,9 @@ type openTorrent struct {
 	pc    storage.PieceCompletion
 	mu    sync.Mutex
 	open  map[string]*os.File
+	// closed: the torrent stopped; nothing is opened again (a late read
+	// would keep a file open, locked on Windows).
+	closed bool
 }
 
 func (s fileStore) OpenTorrent(_ context.Context, info *metainfo.Info, hash metainfo.Hash) (storage.TorrentImpl, error) {
@@ -78,6 +81,7 @@ func (s fileStore) OpenTorrent(_ context.Context, info *metainfo.Info, hash meta
 func (t *openTorrent) close() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.closed = true
 	var first error
 	for p, f := range t.open {
 		if err := f.Close(); err != nil && first == nil {
@@ -93,6 +97,9 @@ func (t *openTorrent) close() error {
 func (t *openTorrent) file(path string, write bool) (*os.File, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if t.closed {
+		return nil, os.ErrClosed
+	}
 	if f, ok := t.open[path]; ok {
 		return f, nil
 	}

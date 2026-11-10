@@ -33,16 +33,12 @@ import (
 	wails "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-// TorrentSettings are Options → Torrents. The network ones (incoming,
-// UPnP, port, DHT, blocklist) apply when the session starts; a running one
-// starts again when they change.
+// TorrentSettings are Options → Torrents. Torrents always go through the
+// connection settings' SOCKS5 proxy, so peers never see this computer's
+// address (there is no listening port, UPnP or DHT to set: each would show
+// it). The blocklist applies when the session starts; a running one starts
+// again when it changes.
 type TorrentSettings struct {
-	// Incoming accepts connections from peers; UPnP asks the router to
-	// forward Port (0: any, picked at each start).
-	Incoming bool `json:"incoming"`
-	UPnP     bool `json:"upnp"`
-	Port     int  `json:"port"`
-	DHT      bool `json:"dht"`
 	// Blocklist is a blocklist's address ("": none), fetched again every
 	// torrent.BlocklistDays.
 	Blocklist string `json:"blocklist"`
@@ -63,7 +59,7 @@ type TorrentSettings struct {
 const keyTorrents = "torrent.settings"
 
 func defaultTorrentSettings() TorrentSettings {
-	return TorrentSettings{Incoming: true, UPnP: true, DHT: true, UploadLimitKB: 100, StopRatio: 200, StopMinutes: 1440}
+	return TorrentSettings{UploadLimitKB: 100, StopRatio: 200, StopMinutes: 1440}
 }
 
 func (s TorrentSettings) limits() torrent.SharingLimits {
@@ -84,10 +80,6 @@ func (s TorrentSettings) uploadLimit() int64 {
 	return max(s.UploadLimitKB, 1) << 10
 }
 
-func (s TorrentSettings) sameNetwork(o TorrentSettings) bool {
-	return s.Incoming == o.Incoming && s.UPnP == o.UPnP && s.Port == o.Port && s.DHT == o.DHT && s.Blocklist == o.Blocklist
-}
-
 // GetTorrentSettings returns Options → Torrents.
 func (a *App) GetTorrentSettings() TorrentSettings {
 	s := defaultTorrentSettings()
@@ -102,10 +94,7 @@ func (a *App) GetTorrentSettings() TorrentSettings {
 
 // SaveTorrentSettings validates and saves Options → Torrents.
 func (a *App) SaveTorrentSettings(s TorrentSettings) (TorrentSettings, error) {
-	switch {
-	case s.Port < 0 || s.Port > 65535:
-		return TorrentSettings{}, errors.New("the port must be between 0 (any) and 65535")
-	case s.UploadLimitKB < 0 || s.StopRatio < 0 || s.StopMinutes < 0:
+	if s.UploadLimitKB < 0 || s.StopRatio < 0 || s.StopMinutes < 0 {
 		return TorrentSettings{}, errors.New("limits must not be negative")
 	}
 	s.Blocklist = strings.TrimSpace(s.Blocklist)
@@ -121,9 +110,8 @@ func (a *App) SaveTorrentSettings(s TorrentSettings) (TorrentSettings, error) {
 	}
 	if session := a.runningTorrents(); session != nil {
 		session.SetUploadLimit(s.uploadLimit())
-		if !old.sameNetwork(s) {
-			a.stopTorrents()
-			if _, err := a.torrentSession(); err != nil {
+		if old.Blocklist != s.Blocklist {
+			if err := a.restartTorrents(); err != nil {
 				return s, fmt.Errorf("saved, but torrents could not start again: %w", err)
 			}
 		}
@@ -229,11 +217,10 @@ func (a *App) torrentSession() (*torrent.Torrents, error) {
 		return nil, err
 	}
 	ts := a.GetTorrentSettings()
-	cfg := torrent.Config{StateDir: a.torrentDir(), Listen: ts.Incoming, UPnP: ts.UPnP, Port: ts.Port, DHT: ts.DHT,
+	// Only the connection settings' fixed proxy (SOCKS5) carries torrents:
+	// without one, torrent.ErrNoProxy.
+	cfg := torrent.Config{StateDir: a.torrentDir(), Proxy: a.torrentProxy(),
 		Blocklist: torrent.LoadBlocklist(a.torrentDir(), ts.Blocklist)}
-	if n := a.GetNetworkSettings(); n.ProxyMode == "fixed" {
-		cfg.Proxy = n.ProxyURL
-	}
 	s, err := torrent.Start(cfg)
 	if err != nil {
 		return nil, err
@@ -251,6 +238,30 @@ func (a *App) torrentSession() (*torrent.Torrents, error) {
 	h.s, h.stop, h.done = s, make(chan struct{}), make(chan struct{})
 	go a.watchTorrents(s, h.stop, h.done)
 	return s, nil
+}
+
+// torrentProxy is the proxy torrents go through: the connection settings'
+// fixed one ("": none).
+func (a *App) torrentProxy() string {
+	if n := a.GetNetworkSettings(); n.ProxyMode == "fixed" {
+		return n.ProxyURL
+	}
+	return ""
+}
+
+// restartTorrents starts a running session again (new settings, a new
+// proxy); one that can't start stays stopped.
+func (a *App) restartTorrents() error {
+	if a.runningTorrents() == nil {
+		return nil
+	}
+	a.stopTorrents()
+	_, err := a.torrentSession()
+	if err != nil && a.ctx != nil {
+		a.notice(a.ctx, "error", "Torrents stopped: "+err.Error())
+	}
+	a.torrentsChanged()
+	return err
 }
 
 // stopTorrents ends the session (the list stays).

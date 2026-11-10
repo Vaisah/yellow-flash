@@ -94,11 +94,17 @@ func (a *App) SaveNetworkSettings(s NetworkSettings) (NetworkSettings, error) {
 	if s.DataCapEnabled && (s.DataCapMB < 1 || s.DataCapHours < 1) {
 		return NetworkSettings{}, errors.New("the download limit needs a size and a period of at least 1")
 	}
+	oldTorrentProxy := a.torrentProxy()
 	raw, _ := json.Marshal(s)
 	if err := a.store.Settings().Set(context.Background(), keyNetwork, string(raw)); err != nil {
 		return NetworkSettings{}, err
 	}
 	a.applyLiveSettings(s)
+	// Torrents go through the fixed proxy only: a running session moves to
+	// the new one, or stops without one.
+	if a.torrentProxy() != oldTorrentProxy {
+		_ = a.restartTorrents()
+	}
 	return s, nil
 }
 
