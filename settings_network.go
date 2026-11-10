@@ -95,6 +95,7 @@ func (a *App) SaveNetworkSettings(s NetworkSettings) (NetworkSettings, error) {
 		return NetworkSettings{}, errors.New("the download limit needs a size and a period of at least 1")
 	}
 	oldTorrentProxy := a.torrentProxy()
+	oldConnection := connectionOf(a.GetNetworkSettings())
 	raw, _ := json.Marshal(s)
 	if err := a.store.Settings().Set(context.Background(), keyNetwork, string(raw)); err != nil {
 		return NetworkSettings{}, err
@@ -105,7 +106,19 @@ func (a *App) SaveNetworkSettings(s NetworkSettings) (NetworkSettings, error) {
 	if a.torrentProxy() != oldTorrentProxy {
 		_ = a.restartTorrents()
 	}
+	// The debrid services are asked through the new proxy and DNS.
+	if connectionOf(s) != oldConnection {
+		a.restartDebridClient()
+	}
 	return s, nil
+}
+
+// connectionOf is the part of s that says how connections are made (DNS,
+// proxy).
+func connectionOf(s NetworkSettings) NetworkSettings {
+	s.SpeedLimitKBps, s.FTPActive = 0, false
+	s.DataCapEnabled, s.DataCapMB, s.DataCapHours = false, 0, 0
+	return s
 }
 
 // applyLiveSettings applies what can change while downloads run.

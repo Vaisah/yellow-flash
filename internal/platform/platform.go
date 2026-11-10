@@ -1,6 +1,7 @@
 // Package platform declares operating-system services behind interfaces so
-// the engine stays platform-neutral. OS-backed implementations (Windows
-// Credential Manager, freedesktop Secret Service) arrive in Phase 6.
+// the engine stays platform-neutral. Keychain (keychain*.go) is the
+// OS-backed SecretStore: Windows Credential Manager, freedesktop Secret
+// Service.
 package platform
 
 import (

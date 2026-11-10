@@ -78,6 +78,20 @@ func (k Kind) TokenPage() string {
 // registered by the app's maintainer: its API key is pasted.
 func (k Kind) SignsInByCode() bool { return k == RealDebrid || k == AllDebrid }
 
+// ownDomains are the service's own: the links it gives for a torrent's files
+// (Real-Debrid's real-debrid.com/d/…, AllDebrid's alldebrid.com/f/…) are
+// unlocked through its account, also after a restart. Premiumize's are
+// direct links to the user's cloud.
+func (k Kind) ownDomains() []string {
+	switch k {
+	case RealDebrid:
+		return []string{"real-debrid.com"}
+	case AllDebrid:
+		return []string{"alldebrid.com"}
+	}
+	return nil
+}
+
 // Valid reports whether k is a service Yellow Flash knows.
 func (k Kind) Valid() bool { return k == RealDebrid || k == AllDebrid || k == Premiumize }
 
@@ -576,7 +590,14 @@ type Debrid struct {
 	// pinned are links that go through an account whatever their host (a
 	// torrent's files while they download; torrents.go).
 	pinned map[string]*session
+	// hostsWait is open while an account's host list is still to be read
+	// (SetAccounts opens it, RefreshHosts closes it): a link asked for
+	// meanwhile waits for the lists rather than go to the file host itself.
+	hostsWait chan struct{}
 }
+
+// hostsWaitMax bounds that wait (a service that doesn't answer).
+const hostsWaitMax = 30 * time.Second
 
 // String says how many accounts, never what they hold.
 func (d *Debrid) String() string {
@@ -613,6 +634,14 @@ func (d *Debrid) SetAccounts(accounts []Account, c *Client) {
 		}
 	}
 	d.sessions = kept
+	unknown := false
+	for _, s := range kept {
+		_, known := d.domains[s.account.ID]
+		unknown = unknown || !known
+	}
+	if unknown && d.hostsWait == nil {
+		d.hostsWait = make(chan struct{})
+	}
 }
 
 func (d *Debrid) all() []*session {
@@ -652,6 +681,12 @@ func (d *Debrid) RefreshHosts(ctx context.Context) error {
 		d.domains[s.account.ID] = list
 		d.mu.Unlock()
 	}
+	d.mu.Lock()
+	if d.hostsWait != nil {
+		close(d.hostsWait) // every account was asked, answered or not
+		d.hostsWait = nil
+	}
+	d.mu.Unlock()
 	return first
 }
 
@@ -688,7 +723,7 @@ func (d *Debrid) sessionFor(rawURL string) *session {
 		return s
 	}
 	for _, s := range d.sessions {
-		if HostMatches(u.Hostname(), d.domains[s.account.ID]) {
+		if HostMatches(u.Hostname(), d.domains[s.account.ID]) || HostMatches(u.Hostname(), s.account.Service.ownDomains()) {
 			return s
 		}
 	}
@@ -701,7 +736,39 @@ func (d *Debrid) UnlockerFor(rawURL string) engine.Unlocker {
 	if s := d.sessionFor(rawURL); s != nil {
 		return &unlocker{s}
 	}
+	d.mu.RLock()
+	wait := d.hostsWait
+	d.mu.RUnlock()
+	if u, err := url.Parse(rawURL); wait != nil && err == nil && (u.Scheme == "http" || u.Scheme == "https") {
+		return &waitingUnlocker{d: d, wait: wait}
+	}
 	return nil
+}
+
+// waitingUnlocker waits for the host lists being read, then unlocks
+// through the account that takes the link, or lets it go directly.
+type waitingUnlocker struct {
+	d    *Debrid
+	wait chan struct{}
+}
+
+func (w *waitingUnlocker) Name() string { return "debrid account" }
+
+func (w *waitingUnlocker) Unlock(ctx context.Context, rawURL string, note func(string)) (*engine.Unlocked, error) {
+	t := time.NewTimer(hostsWaitMax)
+	defer t.Stop()
+	select {
+	case <-w.wait:
+	case <-t.C:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	s := w.d.sessionFor(rawURL)
+	if s == nil {
+		return nil, nil // no account takes it: downloaded directly
+	}
+	u, err := s.unlock(ctx, rawURL, note)
+	return u, named(s.account.Service, err)
 }
 
 // AccountInfo asks the service about account id (Options, after signing in).

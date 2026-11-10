@@ -760,6 +760,11 @@ func isTorrentCommand(cmd ipc.Command) bool {
 // window to choose its files ("app:add-torrent"), or (/n, /a) added whole
 // to the folder named.
 func (a *App) torrentCommand(ctx context.Context, cmd ipc.Command) {
+	// Torrents go to the debrid account when it takes them: no peers.
+	if a.debridTorrentsOn() {
+		a.debridTorrentCommand(cmd)
+		return
+	}
 	silent := cmd.Silent || cmd.Later
 	if !silent {
 		a.focusWindow(ctx)

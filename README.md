@@ -23,6 +23,7 @@ wails build      # produces build/bin/Yellow Flash.exe (icon from build/appicon.
 - **Crash recovery.** Downloads left in an active state become `PAUSED`. Saved progress is checked against the temporary file.
 - **Retries.** Delays grow exponentially with random jitter, and the server's `Retry-After` is respected for 429 and 503. Timeouts, connection resets, other network errors, and HTTP statuses are classified separately so the engine knows which to retry.
 - **Integrity.** Before publishing, the engine checks the final size and any digest the server advertises (`Repr-Digest`, `Digest`, `Content-MD5`, `Content-Digest`). The finished file never overwrites an existing one; a name clash is published as `name (1).ext`.
+- **Debrid accounts.** With your own Real-Debrid, AllDebrid or Premiumize account, file-host links come through the service's direct links, and torrents can go to the account, so no peer ever connects to this computer. Sign-ins are kept in the system keychain, never in Yellow Flash's files.
 - **Progress.** Speed is an exponential moving average. The engine reports average speed, ETA (only when it is known), and active connections, at most every 250 ms.
 - **Security.**
   - URLs and redirect targets are validated.
@@ -103,7 +104,8 @@ internal/
   infrastructure/filesystem filename sanitising, temp files, no-overwrite publishing
   infrastructure/persistence/jsonstore downloads.json + resume/<id>.json (domain.Store)
   infrastructure/persistence/memory   non-durable domain.Store
-  platform                 SecretStore interface (OS keychains arrive in Phase 6)
+  platform                 SecretStore, and the system keychain (Windows Credential Manager, Secret Service)
+  debrid                   debrid service accounts: unlocking links, sign-in, torrents through the account
 tests/integration          end-to-end scenarios
 ```
 

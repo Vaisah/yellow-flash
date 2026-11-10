@@ -284,11 +284,17 @@ func TestAllDebridsDocumentedCodesAndTree(t *testing.T) {
 // A torrent's file link goes through its account while it downloads,
 // whatever its host.
 func TestAPinnedLinkGoesThroughItsAccount(t *testing.T) {
-	d := &Debrid{}
-	d.SetAccounts([]Account{{ID: "1", Service: RealDebrid, Credential: Token("good")}}, NewClient(nil, Services{}))
-	link := "https://real-debrid.com/d/ABC"
+	d := newRig(t).debrid(t, Account{ID: "1", Service: RealDebrid, Credential: Token("good")})
+	link := "https://cdn.example/d/ABC"
 	if d.UnlockerFor(link) != nil {
 		t.Fatal("not on any host list")
+	}
+	// The service's own links are its account's, pinned or not.
+	if u := d.UnlockerFor("https://real-debrid.com/d/ABC"); u == nil || u.Name() != "Real-Debrid" {
+		t.Fatal("real-debrid.com is Real-Debrid's")
+	}
+	if d.UnlockerFor("https://alldebrid.com/f/X") != nil {
+		t.Fatal("alldebrid.com isn't Real-Debrid's")
 	}
 	release := d.pin(link, d.session("1"))
 	if u := d.UnlockerFor(link); u == nil || u.Name() != "Real-Debrid" {
@@ -298,4 +304,46 @@ func TestAPinnedLinkGoesThroughItsAccount(t *testing.T) {
 	if d.UnlockerFor(link) != nil {
 		t.Fatal("taken back")
 	}
+}
+
+// Links asked for while the host lists are still being read wait for them:
+// one the account takes goes through it, any other directly.
+func TestLinksWaitForTheHostListsBeingRead(t *testing.T) {
+	r := newRig(t)
+	d := &Debrid{}
+	d.SetAccounts([]Account{{ID: "1", Service: AllDebrid, Credential: Token("good")}}, r.client)
+	host, other := d.UnlockerFor("http://hoster.test/file/1M/w.bin"), d.UnlockerFor("http://elsewhere.test/a")
+	if host == nil || other == nil {
+		t.Fatal("both wait for the lists")
+	}
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		_ = d.RefreshHosts(context.Background())
+	}()
+	u, err := host.Unlock(context.Background(), "http://hoster.test/file/1M/w.bin", func(string) {})
+	if err != nil || u == nil || !strings.Contains(u.URL, "/gen/1M/w.bin") {
+		t.Fatal(u, err)
+	}
+	if u, err := other.Unlock(context.Background(), "http://elsewhere.test/a", func(string) {}); u != nil || err != nil {
+		t.Fatal("not the account's: directly", u, err)
+	}
+	if d.UnlockerFor("http://elsewhere.test/a") != nil {
+		t.Fatal("once the lists are read, other links don't wait")
+	}
+	// A refusal while waiting names its service.
+	gone, _ := (&waitingUnlocker{d: d, wait: closedChan()}).Unlock(context.Background(), "http://hoster.test/file/1M/g.bin?gone=1", func(string) {})
+	if gone != nil {
+		t.Fatal(gone)
+	}
+	_, err = (&waitingUnlocker{d: d, wait: closedChan()}).Unlock(context.Background(), "http://hoster.test/file/1M/g.bin?gone=1", func(string) {})
+	var se *engine.ServiceError
+	if !errors.As(err, &se) || se.Service != "AllDebrid" || se.Fault != engine.FaultFileUnavailable {
+		t.Fatal(err)
+	}
+}
+
+func closedChan() chan struct{} {
+	c := make(chan struct{})
+	close(c)
+	return c
 }

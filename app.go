@@ -57,6 +57,9 @@ type App struct {
 	// downloads' last speeds, for its list.
 	remote *remote.Remote
 	speeds speeds
+	// debrid holds the debrid accounts (the engine's unlockers) and the
+	// torrents sent to them.
+	debrid debridHost
 
 	// Commands from the IPC channel wait here until the UI is ready.
 	commands chan ipc.Incoming
@@ -134,8 +137,9 @@ func (a *App) Startup(ctx context.Context) {
 	if err != nil {
 		runtime.LogErrorf(ctx, "network settings: %v", err)
 	}
+	// File-host links go through the user's debrid accounts (debrid_app.go).
 	manager, err := engine.New(a.store, engine.Config{AllowPrivateNetworks: true, Publisher: publisher,
-		HostLimits: a.store, DNS: dns, Network: netOpts})
+		HostLimits: a.store, DNS: dns, Network: netOpts, Unlockers: a.debridAccounts()})
 	if err != nil {
 		runtime.LogErrorf(ctx, "start download engine: %v", err)
 		return
@@ -171,6 +175,7 @@ func (a *App) Startup(ctx context.Context) {
 	go cap.Run(qctx)
 	go a.registerBrowserHost(ctx)
 	go a.resumeTorrents()
+	go a.startDebrid()
 	a.startRemote()
 }
 
@@ -203,6 +208,7 @@ func (a *App) Shutdown(ctx context.Context) {
 		a.stopQueues()
 	}
 	a.stopTorrents()
+	a.stopDebrid() // before the downloads: its runs pause their files
 	canClose := true
 	if a.service != nil {
 		waitCtx, cancel := context.WithTimeout(ctx, 20*time.Second)

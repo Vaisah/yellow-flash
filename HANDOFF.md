@@ -258,7 +258,7 @@ is at `C:\Users\Vaisah\Videos\Go\misterdownloadmanager-main`, version 0.5.1, GPL
 | 5 ✅ | `crates/torrent`, and `crates/app/src/torrents.rs`'s list, sharing limits and blocklist | `internal/torrent`, `torrents_app.go` | **Done 2026-11-10** (backend; the torrent windows are UI work). See "Step 5 notes". |
 | 6 ✅ | `crates/remote`, and the app's answers to it | `internal/remote`, `remote_app.go` | **Done 2026-11-10** (backend; Options → Remote is UI work). See "Step 6 notes". |
 | 7 ✅ | `crates/cli`, `crates/mcp`, and the app's automation API answers | `cmd/yellowflash-cli` (replaced `cmd/engine-test`), `cmd/yellowflash-mcp`, `api_app.go` | **Done 2026-11-10.** See "Step 7 notes". |
-| 8 | `crates/debrid`, `crates/extract`, `crates/geo`, `crates/crash` | `internal/...` | Debrid services, archive extraction, server location, crash reports. |
+| 8 | `crates/debrid`, `crates/extract`, `crates/geo`, `crates/crash` | `internal/debrid`, `internal/platform/keychain*`, `debrid_app.go`, `debrid_torrents_app.go`; `internal/...` | **Debrid done 2026-11-10** (8a–8e, see "Step 8 notes"). Archive extraction, server location, crash reports to do. |
 | 9 | `crates/labserver` | `tests/lab` | Their fault-injecting HTTP/FTP server; merge it with our `fileServer`. |
 
 ### Step 1 notes (`internal/ipc`)
@@ -509,6 +509,31 @@ Three commits (7a the app's API, 7b the MCP server, 7c the command line).
 - Torrents: `torrent-create`, `torrent-info`, `torrent-get` (`--proxy socks5://…` required, as in the app; `--files`, `--seconds`, `--use-existing`).
 - Separate program, unlike MDM's launcher that runs the app's own program with `--cli`.
 - Not ported: `playlist-get`, `--dns`, `--adapter` and `--direct` (no adapters or debrid yet), MDM's `.mdm.json` state files (the list replaces them).
+
+### Step 8 notes (debrid services): done 2026-11-10
+
+Five commits (8a the engine's hook, 8b the services, 8c torrents through them, 8d the keychain, 8e the app).
+
+**Engine** (`internal/engine/unlock.go`)
+- `Config.Unlockers` gives a link its service account, asked on every attempt (start, resume, retry). The direct link is fetched without the host's headers (cookies, logins), capped at the service's connections (Real-Debrid's `chunks`), and asked for again when it dies mid-download (401/403/404/410), keeping the bytes. Resumes through a service compare the size only (each unlock may name another server, with its own ETag).
+- The direct link is never stored, shown or logged: `URL` and `FinalURL` keep the host's link, and errors from net/http are scrubbed (`hideLink`). The Add URL preview unlocks too.
+- Refusals are `*engine.ServiceError` (`Fault`: sign-in, not-premium, host-down, …), retried after the service's wait when it is within the retry policy (too many requests: 1 min, too many active: 2 min); host or service down (5 min) fails the download.
+
+**Services** (`internal/debrid`, tests against `internal/debrid/debridtest`, a port of the lab server's fakes)
+- Real-Debrid (pasted token, or the device flow with its open-source client id and token refresh), AllDebrid (key, or PIN; delayed links polled), Premiumize (API key only). Only their documented APIs; tokens in the `Authorization` header only.
+- Accounts in priority order: a link goes to the first whose service lists its host (or the service's own domain). While the host lists are being read, links wait for them (up to 30 s) instead of going to the host.
+- Each service stays under half its published request budget and pauses after 429.
+- Torrents (`RunTorrent`): the magnet goes to the first account, the service fetches it, its files come over HTTPS through the app's downloads, then it is removed from the account's list. No peer connects to this computer. A path that climbs out of the folder refuses the whole torrent before anything is written.
+
+**Keychain** (`internal/platform/keychain*.go`)
+- Windows Credential Manager (generic credentials, this user, this computer) and the Linux Secret Service over D-Bus (`godbus/dbus/v5`), whose own prompt unlocks a locked keyring. Elsewhere, or without a Secret Service, sign-ins last until the app closes.
+
+**App** (`debrid_app.go`, `debrid_torrents_app.go`)
+- Settings key `debrid.settings` (accounts: id, service, user, on/off; "torrents through the account"); no secret in it. Sign-ins in the keychain as `Yellow Flash/debrid/<id>`.
+- Bindings: `DebridServices`, `GetDebridSettings`, `SaveDebridSettings`, `AddDebridToken`, `StartDebridSignIn`/`GetDebridSignIn`/`CancelDebridSignIn` (event `debrid:signin`), `RemoveDebridAccount`, `CheckDebridAccount`, `RefreshDebridHosts`; `SendTorrentToDebrid`, `ListDebridTorrents`, `StopDebridTorrent`, `ResumeDebridTorrent`, `RemoveDebridTorrent` (event `debrid:torrents`). Host lists are read at start and every 12 h; the services are asked through the connection settings' proxy and DNS.
+- With "torrents through the account" on, a magnet or `.torrent` sent to the app (command line, browser, remote control) goes to the account; no SOCKS5 proxy is needed. Its list is `<data>/debrid/torrents.json`; one the app was running continues at the next start.
+- Not ported: the UI (Options → Debrid, the torrent rows), per-download "through …" choice in File Properties, the event-log window (notes go to the log and the torrent's own notes).
+- Verified on Windows (the real Credential Manager included). The Linux keychain is compiled and vetted; its live test and the `-race` runs wait for the VM.
 
 Not ported: `crates/app` (their egui desktop UI), since Yellow Flash's UI is Wails + React. Port
 its *behaviour* (queues, scheduler, settings) into Go services and the React UI as each feature
