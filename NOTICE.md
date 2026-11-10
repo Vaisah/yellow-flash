@@ -49,6 +49,7 @@ key its token is kept under are changed. Each file starts with a header saying s
 | Required by anacrolix/torrent, Apache-2.0 | Apache-2.0 | `anacrolix/btree`, `go-logr/logr`, `go-logr/stdr`, `google/btree`, `go.opentelemetry.io/auto/sdk`; `RoaringBitmap/roaring` and `go.opentelemetry.io/otel` (otel, metric, trace) are Apache-2.0 with parts under BSD-3-Clause | port step 5b (`torrent`) |
 | Required by anacrolix/torrent, BSD | BSD-3-Clause, BSD-2-Clause | BSD-3-Clause: `bahlo/generic-list-go`, `bradfitz/iter`, `edsrzf/mmap-go`, `google/go-cmp`, `google/uuid`, `spaolacci/murmur3`, `wlynxg/anet`, `golang.org/x/crypto`, `x/exp`, `x/sync`, `x/text`; BSD-2-Clause: `gorilla/websocket`, `pkg/errors` | port step 5b (`torrent`) |
 | Required by anacrolix/torrent, ISC | ISC | `davecgh/go-spew` | port step 5b (`torrent`) |
+| `rsc.io/qr` v0.2.0 | BSD-3-Clause | The remote control's pairing QR code, drawn in a terminal (`api_app.go`, `yellowflash-cli pair`) | port step 7a (automation API) |
 
 ## Third-party data and assets
 

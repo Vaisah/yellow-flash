@@ -26,7 +26,6 @@ import (
 	domain "github.com/vaisah/internal/domain/download"
 	"github.com/vaisah/internal/infrastructure/network"
 	"github.com/vaisah/internal/ipc"
-	"github.com/vaisah/internal/platform"
 	"github.com/vaisah/internal/remote"
 	"github.com/vaisah/internal/torrent"
 	wails "github.com/wailsapp/wails/v2/pkg/runtime"
@@ -184,63 +183,35 @@ func (s *speeds) get(id string) float64 {
 	return s.m[id]
 }
 
-// answerRemote answers a paired device's command (one line, as the
-// automation API does).
-func (a *App) answerRemote(ctx context.Context, in ipc.Incoming) {
+// remoteAdd answers a paired device's address, magnet link or .torrent
+// (its bytes: a path on this computer is never taken).
+func (a *App) remoteAdd(ctx context.Context, in ipc.Incoming) {
 	cmd := in.Cmd
 	reply := func(v any) { in.Reply <- ipc.Line(v) }
-	refuse := func(msg, code string) { reply(ipc.ErrorAnswer{Error: msg, Code: code}) }
 	if a.ready() != nil {
-		refuse("Yellow Flash is not ready", "not-ready")
+		reply(ipc.ErrorAnswer{Error: "Yellow Flash is not ready", Code: "not-ready"})
 		return
 	}
 	switch {
-	case cmd.Query == "list":
-		reply(a.remoteList(ctx))
-	case cmd.Query != "":
-		refuse("unknown question", "unknown")
-	case cmd.Action == "start_queue" || cmd.Action == "stop_queue":
-		r := a.queues.Load()
-		id, ok := "", false
-		if r != nil {
-			id, ok = r.FindByName(cmd.Queue)
-		}
-		if !ok {
-			refuse("no such queue", "no-queue")
-			return
-		}
-		var err error
-		if cmd.Action == "start_queue" {
-			err = r.Start(ctx, id)
-		} else {
-			err = r.Stop(ctx, id)
-		}
-		if err != nil {
-			refuse(err.Error(), "failed")
-			return
-		}
-		reply(ipc.ActAnswer{Done: []string{cmd.Queue}, Skipped: []ipc.Skipped{}})
-	case cmd.Action != "":
-		reply(a.remoteAct(ctx, cmd.Action, cmd.IDs))
 	case len(cmd.TorrentFile) > 0 || torrent.IsMagnet(cmd.URL):
 		// Looked up in the background (a magnet asks its peers first).
 		a.torrentCommand(ctx, ipc.Command{URL: cmd.URL, TorrentFile: cmd.TorrentFile, Silent: true, Later: cmd.Later})
 		reply(ipc.AddAnswer{Pending: true})
 	case cmd.URL != "":
-		d, err := a.remoteAdd(ctx, cmd)
+		d, err := a.remoteAddURL(ctx, cmd)
 		if err != nil {
-			refuse(err.Error(), "unsupported")
+			reply(ipc.ErrorAnswer{Error: err.Error(), Code: "unsupported"})
 			return
 		}
 		reply(ipc.AddAnswer{ID: d.ID})
 	default:
-		refuse("nothing to do", "unknown")
+		reply(ipc.ErrorAnswer{Error: "nothing to do", Code: "unknown"})
 	}
 }
 
-// remoteAdd adds a web or FTP address to the download folder: started, or
-// waiting in the queue named (the main queue by default).
-func (a *App) remoteAdd(ctx context.Context, cmd ipc.Command) (*domain.Download, error) {
+// remoteAddURL adds a web or FTP address to the download folder: started,
+// or waiting in the queue named (the main queue by default).
+func (a *App) remoteAddURL(ctx context.Context, cmd ipc.Command) (*domain.Download, error) {
 	u, err := network.ValidateURL(strings.TrimSpace(cmd.URL))
 	if err != nil {
 		return nil, err
@@ -272,151 +243,4 @@ func (a *App) uiNotice(kind, text string) {
 	if a.ctx != nil {
 		a.notice(a.ctx, kind, text)
 	}
-}
-
-// remoteStatus is a download's status as the API says it.
-func remoteStatus(s domain.Status) string {
-	switch {
-	case s == domain.Queued:
-		return "Queued"
-	case s.IsActive():
-		return "Downloading"
-	case s == domain.Completed:
-		return "Complete"
-	case s == domain.Failed:
-		return "Error"
-	}
-	return "Stopped"
-}
-
-// remoteList is the list for a paired device: downloads and torrents, no
-// paths.
-func (a *App) remoteList(ctx context.Context) ipc.ListAnswer {
-	ans := ipc.ListAnswer{Downloads: []ipc.DownloadInfo{}, Queues: []ipc.QueueInfo{}, Categories: []ipc.CategoryInfo{}}
-	list, _ := a.service.List(ctx)
-	var total float64
-	for _, d := range list {
-		info := ipc.DownloadInfo{ID: d.ID, File: d.Filename, URL: d.URL, Status: remoteStatus(d.Status),
-			Downloaded: d.Downloaded}
-		if info.Status == "Error" {
-			info.Error = d.Error
-		}
-		if d.Size > 0 {
-			size := d.Size
-			info.Size = &size
-		}
-		if !d.CreatedAt.IsZero() {
-			added := d.CreatedAt.UTC().Format(time.RFC3339)
-			info.Added = &added
-		}
-		if d.Status.IsActive() {
-			sp := a.speeds.get(d.ID)
-			info.Speed = int64(sp)
-			total += sp
-		}
-		ans.Downloads = append(ans.Downloads, info)
-	}
-	for _, t := range a.torrentRows() {
-		size, added := t.Stats.Total, t.Added.UTC().Format(time.RFC3339)
-		info := ipc.DownloadInfo{ID: torrentIDPrefix + t.Hash, File: t.Name, URL: "magnet:?xt=urn:btih:" + t.Hash,
-			Downloaded: t.Stats.Done, Size: &size, Added: &added}
-		switch {
-		case t.Finished || t.Stats.Phase == torrent.Finished:
-			info.Status = "Complete"
-		case t.Stats.Phase == torrent.Paused:
-			info.Status = "Stopped"
-		default:
-			info.Status = "Downloading"
-			info.Speed = int64(t.Stats.DownSpeed)
-			total += t.Stats.DownSpeed
-		}
-		ans.Downloads = append(ans.Downloads, info)
-	}
-	ans.Speed = int64(total)
-	if r := a.queues.Load(); r != nil {
-		for _, q := range r.Queues() {
-			ids := q.Items
-			if ids == nil {
-				ids = []string{}
-			}
-			ans.Queues = append(ans.Queues, ipc.QueueInfo{Name: q.Name, Running: q.Running, IDs: ids})
-		}
-	}
-	if v, ok := platform.VolumeOf(a.GetSettings().DownloadDirectory); ok {
-		free := int64(min(v.Free, uint64(1<<62)))
-		ans.Free = &free
-	}
-	return ans
-}
-
-// remoteAct does action to each of ids: what was done, and what was
-// skipped and why.
-func (a *App) remoteAct(ctx context.Context, action string, ids []string) ipc.ActAnswer {
-	ans := ipc.ActAnswer{Done: []string{}, Skipped: []ipc.Skipped{}}
-	skip := func(id, why string) { ans.Skipped = append(ans.Skipped, ipc.Skipped{ID: id, Why: why}) }
-	for _, id := range ids {
-		if hash, ok := strings.CutPrefix(id, torrentIDPrefix); ok {
-			var err error
-			switch action {
-			case "pause":
-				err = a.PauseTorrent(hash)
-			case "start":
-				err = a.ResumeTorrent(hash)
-			case "remove", "delete":
-				err = a.RemoveTorrent(hash, action == "delete")
-			default:
-				err = errors.New("unknown action")
-			}
-			switch {
-			case errors.Is(err, torrent.ErrUnknown):
-				skip(id, "no such download")
-			case err != nil:
-				skip(id, err.Error())
-			default:
-				ans.Done = append(ans.Done, id)
-			}
-			continue
-		}
-		d, err := a.service.Get(ctx, id)
-		if err != nil {
-			skip(id, "no such download")
-			continue
-		}
-		switch action {
-		case "pause":
-			if !d.Status.IsActive() {
-				skip(id, "not running")
-				continue
-			}
-			err = a.service.Pause(ctx, id)
-		case "start":
-			switch {
-			case d.Status == domain.Completed:
-				skip(id, "complete")
-				continue
-			case d.Status.IsActive():
-				skip(id, "already running")
-				continue
-			case d.Status == domain.Failed:
-				err = a.service.Retry(ctx, id)
-			default:
-				err = a.service.Start(ctx, id)
-			}
-		case "remove", "delete":
-			if d.Status.IsActive() {
-				skip(id, "running: pause it first")
-				continue
-			}
-			err = a.DeleteDownload(id, action == "delete")
-		default:
-			skip(id, "unknown action")
-			continue
-		}
-		if err != nil {
-			skip(id, err.Error())
-			continue
-		}
-		ans.Done = append(ans.Done, id)
-	}
-	return ans
 }
