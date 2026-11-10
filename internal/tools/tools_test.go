@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -26,12 +27,53 @@ import (
 // that as its version and exits.
 const fakeHelperEnv = "YELLOWFLASH_FAKE_HELPER"
 
+// fakeModeEnv makes the test binary another kind of fake helper:
+//   - fail: yt-dlp's warnings and an error on stderr, then exit 1;
+//   - sleep: run for a minute;
+//   - parent: start itself as child, then run for a minute;
+//   - child: append a line to $YELLOWFLASH_FAKE_MARKER every 100 ms;
+//   - args: print its arguments, one a line.
+const fakeModeEnv = "YELLOWFLASH_FAKE_MODE"
+
 func TestMain(m *testing.M) {
 	if v, ok := os.LookupEnv(fakeHelperEnv); ok {
 		fmt.Print(v)
 		os.Exit(0)
 	}
-	os.Exit(m.Run())
+	switch os.Getenv(fakeModeEnv) {
+	case "":
+		os.Exit(m.Run())
+	case "fail":
+		fmt.Fprintln(os.Stderr, "[youtube] Extracting URL: https://www.youtube.com/watch?v=x")
+		fmt.Fprintln(os.Stderr, "WARNING: unknown cookie version: \"b'v20'\"")
+		fmt.Fprintln(os.Stderr, "ERROR: [youtube] x: Sign in to confirm you're not a bot.")
+		os.Exit(1)
+	case "sleep":
+		time.Sleep(time.Minute)
+	case "parent":
+		// On Windows the helper joins its job just after it starts: its
+		// child, started later, is born in the job.
+		time.Sleep(500 * time.Millisecond)
+		self, _ := os.Executable()
+		child := exec.Command(self)
+		child.Env = append(os.Environ(), fakeModeEnv+"=child")
+		_ = child.Start()
+		time.Sleep(time.Minute)
+	case "child":
+		for range 600 {
+			f, err := os.OpenFile(os.Getenv("YELLOWFLASH_FAKE_MARKER"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+			if err == nil {
+				_, _ = f.WriteString("x\n")
+				_ = f.Close()
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	case "args":
+		for _, a := range os.Args[1:] {
+			fmt.Println(a)
+		}
+	}
+	os.Exit(0)
 }
 
 func TestARealReleaseChecksumListIsSignedByThePinnedKey(t *testing.T) {
