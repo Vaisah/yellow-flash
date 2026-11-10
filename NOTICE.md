@@ -37,6 +37,13 @@ with a header saying so. The extension's icons are made from Yellow Flash's own 
 | `github.com/google/pprof` | Apache-2.0 | Required by goja | port step 2b (`pac`) |
 | `golang.org/x/net` | BSD-3-Clause | `dns/dnsmessage`, in the DNS tests' fake servers only; it was already an indirect dependency via Wails | port step 2b (`network/dns.go`) |
 | `golang.org/x/sys` | BSD-3-Clause | Windows file lock and foreground permission (`internal/platform/lock_windows.go`); it was already an indirect dependency via Wails | port step 1 (`internal/ipc`) |
+| `github.com/anacrolix/torrent` v1.61.0 | MPL-2.0 | BitTorrent and magnet downloads (`internal/torrent/session.go`), in place of MDM's librqbit; used unmodified (its file storage is replaced by `internal/torrent/files.go`, Yellow Flash's own) | port step 5b (`torrent`) |
+| `golang.org/x/time` | BSD-3-Clause | `rate`, the torrent session's speed limits | port step 5b (`torrent`) |
+| Required by anacrolix/torrent, MPL-2.0 | MPL-2.0 | `anacrolix/dht/v2`, `generics`, `log`, `multiless`, `sync`, `upnp`, `utp` | port step 5b (`torrent`) |
+| Required by anacrolix/torrent, MIT | MIT | `anacrolix/chansync`, `envpprof`, `missinggo` (v1, v2, perf), `stm`; `alecthomas/atomic`, `benbjohnson/immutable`, `cespare/xxhash`, `dustin/go-humanize`, `huandu/xstrings`, `klauspost/cpuid/v2`, `mr-tron/base58`, `multiformats/go-multihash`, `multiformats/go-varint`, `pion/*` (datachannel, dtls, ice, interceptor, logging, mdns, randutil, rtcp, rtp, sctp, sdp, srtp, stun, transport, turn, webrtc), `protolambda/ctxlock`, `rs/dnscache`, `tidwall/btree`, `go.etcd.io/bbolt`, `lukechampine.com/blake3` | port step 5b (`torrent`) |
+| Required by anacrolix/torrent, Apache-2.0 | Apache-2.0 | `anacrolix/btree`, `go-logr/logr`, `go-logr/stdr`, `google/btree`, `go.opentelemetry.io/auto/sdk`; `RoaringBitmap/roaring` and `go.opentelemetry.io/otel` (otel, metric, trace) are Apache-2.0 with parts under BSD-3-Clause | port step 5b (`torrent`) |
+| Required by anacrolix/torrent, BSD | BSD-3-Clause, BSD-2-Clause | BSD-3-Clause: `bahlo/generic-list-go`, `bradfitz/iter`, `edsrzf/mmap-go`, `google/go-cmp`, `google/uuid`, `spaolacci/murmur3`, `wlynxg/anet`, `golang.org/x/crypto`, `x/exp`, `x/sync`, `x/text`; BSD-2-Clause: `gorilla/websocket`, `pkg/errors` | port step 5b (`torrent`) |
+| Required by anacrolix/torrent, ISC | ISC | `davecgh/go-spew` | port step 5b (`torrent`) |
 
 ## Third-party data and assets
 
