@@ -68,6 +68,10 @@ func TestMain(m *testing.M) {
 			}
 			time.Sleep(100 * time.Millisecond)
 		}
+	case "playlist":
+		for i, title := range []string{"One", "Two", "Three"} {
+			fmt.Printf(`{"url": "https://v.example/%d", "title": %q, "playlist_index": %d, "playlist_count": 3, "playlist_title": "Talks"}`+"\n", i+1, title, i+1)
+		}
 	case "args":
 		for _, a := range os.Args[1:] {
 			fmt.Println(a)
