@@ -20,6 +20,13 @@ port began (the Phase 1 engine, the SQLite store, the Wails app and the React in
 code designed only after studying Mister Download Manager's behaviour (the dynamic-splitting
 planner, the first-request download), is original to Yellow Flash.
 
+The browser extension (`extension/`), its tests (`tools/extension/test.mjs`) and the browser help
+page (`docs/browser-help.md`) are Mister Download Manager's, modified for Yellow Flash: its name,
+host name, extension key and IDs, version and help links are changed, its sponsor link is removed,
+and the parts that read MDM's Rust sources read the Go ports instead. Each JavaScript file starts
+with a header saying so. The extension's icons are made from Yellow Flash's own app icon
+(`build/appicon.png`), not Mister Download Manager's.
+
 ## Go dependencies added for the port
 
 | Module | Licence | Used for | Since |
