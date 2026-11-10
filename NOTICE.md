@@ -42,6 +42,14 @@ with a header saying so. The extension's icons are made from Yellow Flash's own 
 
 - `internal/infrastructure/network/sites/testdata/drive-*.html`: Google Drive page samples (test
   data) from Mister Download Manager's `crates/engine/tests/data`, GPL-3.0-or-later.
+- `internal/tools/keys/yt-dlp.asc` and `internal/tools/keys/gallery-dl.asc`: the public OpenPGP
+  keys yt-dlp's and gallery-dl's releases are signed with (fingerprint
+  AC0CBBE6848D6A873464AF4E57CF65933B5A7581 for yt-dlp), as Mister Download Manager pins them
+  in `crates/tools/keys`. Public keys, published by those projects to check their releases.
+- `internal/tools/testdata/`: real signed checksum lists of yt-dlp and gallery-dl releases, and
+  Mister Download Manager's release key with one of its signed lists (used only to test the
+  Ed25519 signature check; Yellow Flash never trusts that key), from Mister Download Manager's
+  `crates/tools/tests/fixtures` and `crates/tools/keys`.
 
 Assets ported from Mister Download Manager keep their own licences, as listed in its
 `ATTRIBUTION.md`. When one of them is added to this repository, list it here with its author,
