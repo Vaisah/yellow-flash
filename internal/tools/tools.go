@@ -329,8 +329,25 @@ func InstallYtDlp(ctx context.Context, dir string, client *http.Client, progress
 	if mine, ok := Chosen(dir, HelperYtDlp); ok {
 		return mine, nil
 	}
-	src := ytdlpSource
-	body, err := getBytes(ctx, client, src.releases)
+	return installSigned(ctx, dir, client, signedRelease{
+		tool: "yt-dlp", src: ytdlpSource, sums: "SHA2-256SUMS", asset: YtDlpAsset(),
+	}, progress)
+}
+
+// signedRelease is a helper published as one program with a signed
+// checksum list.
+type signedRelease struct {
+	tool  string // its folder under the tools dir
+	src   source
+	sums  string // the checksum list's name; its signature is sums+".sig"
+	asset string // the program's name in the release
+}
+
+// installSigned installs r's latest release unless the installed one is as
+// new: the checksum list checked against the publisher's key, the program
+// against the list, then put in place beside the previous version.
+func installSigned(ctx context.Context, dir string, client *http.Client, r signedRelease, progress Progress) (Installed, error) {
+	body, err := getBytes(ctx, client, r.src.releases)
 	if err != nil {
 		return Installed{}, err
 	}
@@ -338,37 +355,37 @@ func InstallYtDlp(ctx context.Context, dir string, client *http.Client, progress
 	if err := json.Unmarshal(body, &rel); err != nil {
 		return Installed{}, fmt.Errorf("%w: %v", ErrBadRelease, err)
 	}
-	if current, ok := own(dir, "yt-dlp"); ok && !newer(rel.TagName, current.Version) {
+	version := strings.TrimPrefix(rel.TagName, "v")
+	if current, ok := own(dir, r.tool); ok && !newer(version, current.Version) {
 		return current, nil // never the same again, never older
 	}
-	sumsURL, err := rel.url("SHA2-256SUMS")
+	sumsURL, err := rel.url(r.sums)
 	if err != nil {
 		return Installed{}, err
 	}
-	sigURL, err := rel.url("SHA2-256SUMS.sig")
+	sigURL, err := rel.url(r.sums + ".sig")
 	if err != nil {
 		return Installed{}, err
 	}
-	sums, err := signedList(ctx, client, sumsURL, sigURL, src.signed)
+	sums, err := signedList(ctx, client, sumsURL, sigURL, r.src.signed)
 	if err != nil {
 		return Installed{}, err
 	}
-	asset := YtDlpAsset()
-	expected, ok := SumFor(sums, asset)
+	expected, ok := SumFor(sums, r.asset)
 	if !ok {
-		return Installed{}, fmt.Errorf("%w: checksum for %s", ErrMissing, asset)
+		return Installed{}, fmt.Errorf("%w: checksum for %s", ErrMissing, r.asset)
 	}
-	exeURL, err := rel.url(asset)
+	exeURL, err := rel.url(r.asset)
 	if err != nil {
 		return Installed{}, err
 	}
-	root := filepath.Join(dir, "yt-dlp")
+	root := filepath.Join(dir, r.tool)
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return Installed{}, err
 	}
 	// Named by its checksum: one release's cut-off download resumes, never
 	// another's.
-	download := filepath.Join(root, "yt-dlp-"+hex.EncodeToString(expected[:8])+".download")
+	download := filepath.Join(root, r.tool+"-"+hex.EncodeToString(expected[:8])+".download")
 	if err := fetchVerified(ctx, client, exeURL, download, expected, progress); err != nil {
 		return Installed{}, err
 	}
@@ -380,7 +397,7 @@ func InstallYtDlp(ctx context.Context, dir string, client *http.Client, progress
 	if sha256.Sum256(program) != expected {
 		return Installed{}, ErrBadChecksum
 	}
-	return put(dir, "yt-dlp", rel.TagName, asset, program, exeURL)
+	return put(dir, r.tool, version, r.asset, program, exeURL)
 }
 
 // validVersion refuses a version that could name another folder.
