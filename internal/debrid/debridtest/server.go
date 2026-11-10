@@ -56,6 +56,8 @@ type Server struct {
 	pins    map[string]int // check → polls
 	delayed map[int64]delayedLink
 	nextID  int64
+	// torrents are what the accounts hold (torrents.go).
+	torrents map[string]*torrent
 }
 
 type delayedLink struct {
@@ -65,7 +67,8 @@ type delayedLink struct {
 
 // Start runs the fake services until the test ends.
 func Start(t testing.TB) *Server {
-	s := &Server{devices: map[string]int{}, pins: map[string]int{}, delayed: map[int64]delayedLink{}}
+	s := &Server{devices: map[string]int{}, pins: map[string]int{}, delayed: map[int64]delayedLink{},
+		torrents: map[string]*torrent{}}
 	s.srv = httptest.NewServer(s)
 	t.Cleanup(s.srv.Close)
 	return s
@@ -314,7 +317,9 @@ func (s *Server) realDebrid(w http.ResponseWriter, r *http.Request, p string) {
 		writeJSON(w, 200, map[string]any{"access_token": fmt.Sprintf("at-%d", n), "expires_in": 3600,
 			"token_type": "Bearer", "refresh_token": fmt.Sprintf("rt-%d", n)})
 	default:
-		rdError(w, 404, "unknown_ressource", 7)
+		if !s.rdTorrents(w, r, p) {
+			rdError(w, 404, "unknown_ressource", 7)
+		}
 	}
 }
 
@@ -431,7 +436,9 @@ func (s *Server) allDebrid(w http.ResponseWriter, r *http.Request, p string) {
 			adOK(w, map[string]any{"activated": true, "expires_in": 100, "apikey": "good"})
 		}
 	default:
-		adError(w, "GENERIC")
+		if !s.adTorrents(w, r, p) {
+			adError(w, "GENERIC")
+		}
 	}
 }
 
@@ -482,6 +489,8 @@ func (s *Server) premiumize(w http.ResponseWriter, r *http.Request, p string) {
 				"content": []map[string]any{{"path": name, "size": size, "link": direct}}})
 		}
 	default:
-		pmError(w, "not_found")
+		if !s.pmTorrents(w, r, p) {
+			pmError(w, "not_found")
+		}
 	}
 }

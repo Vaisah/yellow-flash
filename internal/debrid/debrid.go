@@ -573,6 +573,9 @@ type Debrid struct {
 	mu       sync.RWMutex
 	sessions []*session
 	domains  map[string][]string // account id → its service's domains
+	// pinned are links that go through an account whatever their host (a
+	// torrent's files while they download; torrents.go).
+	pinned map[string]*session
 }
 
 // String says how many accounts, never what they hold.
@@ -681,6 +684,9 @@ func (d *Debrid) sessionFor(rawURL string) *session {
 	}
 	d.mu.RLock()
 	defer d.mu.RUnlock()
+	if s := d.pinned[rawURL]; s != nil {
+		return s
+	}
 	for _, s := range d.sessions {
 		if HostMatches(u.Hostname(), d.domains[s.account.ID]) {
 			return s
