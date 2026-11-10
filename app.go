@@ -50,6 +50,8 @@ type App struct {
 	stopQueues context.CancelFunc
 	// media holds the video and gallery downloads run by the helpers.
 	media mediaJobs
+	// torrents holds the torrent session and list.
+	torrents torrentHost
 
 	// Commands from the IPC channel wait here until the UI is ready.
 	commands chan ipc.Incoming
@@ -162,6 +164,7 @@ func (a *App) Startup(ctx context.Context) {
 	a.applyLiveSettings(a.GetNetworkSettings())
 	go cap.Run(qctx)
 	go a.registerBrowserHost(ctx)
+	go a.resumeTorrents()
 }
 
 // queueDone does what a finished queue's schedule asks.
@@ -189,6 +192,7 @@ func (a *App) Shutdown(ctx context.Context) {
 	if a.stopQueues != nil {
 		a.stopQueues()
 	}
+	a.stopTorrents()
 	canClose := true
 	if a.service != nil {
 		waitCtx, cancel := context.WithTimeout(ctx, 20*time.Second)

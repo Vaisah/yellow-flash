@@ -102,6 +102,10 @@ func (a *App) dispatch(ctx context.Context, in ipc.Incoming) {
 			}
 		}
 	}
+	if isTorrentCommand(cmd) {
+		a.torrentCommand(ctx, cmd)
+		return
+	}
 	url := strings.TrimSpace(cmd.URL)
 	if url == "" {
 		if !cmd.StartQueue {

@@ -254,7 +254,7 @@ is at `C:\Users\Vaisah\Videos\Go\misterdownloadmanager-main`, version 0.5.1, GPL
 | 2 ✅ | `crates/engine` remainder: `hosts.rs`, `limiter.rs`, `naming.rs`, `verify.rs`, `sparse.rs`, `disk.rs` (2a); `sites/gdrive.rs`, `dns.rs`, `pac.rs`, `ftp.rs`, queues and scheduler, plus JSON storage replacing SQLite (2b) | `internal/engine`, `internal/infrastructure/{network,persistence/jsonstore}`, `internal/platform`, `internal/application/queues`, `internal/domain/queue` | **Done 2026-11-09.** See "Step 2a notes" and "Step 2b notes". |
 | 3 ✅ | `crates/nmhost` + `extension/`, `ipc`'s `browsers.rs`, `capture.rs`, `extension.rs` | `cmd/nm-host`, `extension/`, `internal/browser`, `browser_app.go` | **Done 2026-11-09.** See "Step 3 notes". |
 | 4 ✅ | `crates/tools` | `internal/tools`, `tools_app.go` | **Done 2026-11-10** (backend; the windows are UI work). See "Step 4 notes". |
-| 5 | `crates/torrent` | `internal/torrent` | Magnet links and .torrent files via anacrolix/torrent. |
+| 5 ✅ | `crates/torrent`, and `crates/app/src/torrents.rs`'s list, sharing limits and blocklist | `internal/torrent`, `torrents_app.go` | **Done 2026-11-10** (backend; the torrent windows are UI work). See "Step 5 notes". |
 | 6 | `crates/remote` | `internal/remote` | Phone or LAN remote control over HTTPS with pairing. |
 | 7 | `crates/cli`, `crates/mcp` | `cmd/engine-test` → `cmd/yellowflash-cli`, `cmd/yellowflash-mcp` | Automation API. |
 | 8 | `crates/debrid`, `crates/extract`, `crates/geo`, `crates/crash` | `internal/...` | Debrid services, archive extraction, server location, crash reports. |
@@ -296,7 +296,7 @@ After `Shutdown` starts, commands are answered `gone`. MDM saved pending URLs to
 - Queries and actions (`query`, `action`, `api`, `pair`) all get `{"error":…,"code":"api-off"}`. Implement the automation API in step 7, using the answer types in `ipc/api.go`.
 - MDM's JSON Schema generation (`docs/automation-api.schema.json`) is not ported; add it with step 7.
 - Browser fields: see "Step 3 notes" for which are used, refused or still ignored.
-- Magnet links and `.torrent` files are rejected with a toast until step 5.
+- Magnet links and `.torrent` files: handled since step 5 (`torrentCommand`; see "Step 5 notes").
 
 **Verified.**
 - `go test -race` passes for `internal/ipc` and `internal/platform`; the tests port every MDM ipc test plus end-to-end `Serve`/`Send` tests.
@@ -442,6 +442,32 @@ Seven commits (4a–4d in parts, then 4e); the commit messages give the details.
 - Still refused from the browser: video pages and link lists, until the video and link windows exist (accepting them now would lose them). When they come, check a browser-sent page's host as the restricted client does before handing it to yt-dlp, which has no such guard.
 - Playlists (`tools.StartListing`) have no binding yet: they need the list window.
 - The Linux `-race` run of `internal/tools` is still to do (Docker wasn't running); every test passes on Windows, and `vet` passes for Linux and macOS.
+
+### Step 5 notes (torrents): done 2026-11-10
+
+Three commits (5a rules, 5b session, 5c list and app). MDM wraps librqbit; we wrap `anacrolix/torrent` v1.61.0 (MPL-2.0; it and its ~70 modules are in `NOTICE.md`).
+
+**Rules** (`names.go`, `trackers.go`, `blocklist.go`)
+- Every file name is checked before a torrent is listed or added, and again when storage opens it: no `..`, separators or control characters; on Windows no `:<>"|?*`, trailing dot or space, or device name; no case twins where case is ignored.
+- Trackers on this computer or its network (and numeric-looking names such as `0x7f.1`) are dropped, in the .torrent (outside the info dictionary, so the hash stays) and in magnet links.
+- Blocklists: P2P text or eMule `.dat`, gzipped or not, converted to checked `yf:start-end` lines.
+
+**Session** (`session.go`, `files.go`)
+- `Start`, `Metadata` (a magnet's file list; nothing downloaded or uploaded, and the look-up is dropped), `Add` (the files chosen; paused or not), `Stats` (speeds from deltas), `Peers`, `Pause` (drops the torrent), `Resume` (adds it again), `Remove` (optionally with its files, by name only), and the session's down and up limits (at least 16 KiB/s).
+- Off: web seeds, WebTorrent, a magnet's `xs`/`as` sources, and `x.pe` peers that aren't on the internet. These are all addresses a torrent names.
+- **Torrents are refused while a fixed proxy is set** (`ErrProxy`), because anacrolix can't send peer connections through a proxy and peers would see this computer's address. MDM instead lets torrents go direct unless `torrent_proxy` (SOCKS5) is on. A PAC or the system's proxy doesn't stop torrents.
+- `files.go` is our own file storage: anacrolix's default memory-maps every file and never unmaps it, which on Windows locks a paused or removed torrent's files. It writes in place (no `.part` files), never writes padding files, and treats a piece whose file is missing or too short as not there, so deleted files download again without being hashed. Checked pieces are kept in a bolt store in the state folder.
+- v2-only torrents (BEP 52) are refused: torrents are named by their v1 hash, as in MDM.
+- With port 0, `Start` tries again when Windows refuses the port picked (Hyper-V/Docker reserved ranges); anacrolix only retries "address in use".
+
+**List and app** (`list.go`, `torrents_app.go`)
+- `<data>/torrents/torrents.json` (JSON, as everywhere else) holds each torrent's hash, name, folder, files chosen, paused, finished, uploaded (added up run after run) and seconds shared. `files/<hash>.torrent` keeps each .torrent; `blocklist.p2p` and `blocklist.source` keep the blocklist, fetched again after 7 days through the network settings' proxy (public addresses only, 64 MiB at most).
+- The session starts with the first look-up or add, or at startup when a torrent in the list isn't paused. Network settings (incoming, UPnP, port, DHT, blocklist) restart it when changed; the upload limit applies at once.
+- A finished torrent stops, as any download does, unless **Keep sharing** is on, and then at the ratio or time limit (MDM's D-018 and defaults: off, 2.0, 1440 minutes).
+- Bindings: `GetTorrentSettings`, `SaveTorrentSettings`, `LookUpTorrent` (a magnet asks its peers for up to a minute; a `.torrent` must be an absolute path), `SelectTorrentFile`, `AddTorrent`, `ListTorrents`, `TorrentFiles`, `TorrentPeers`, `PauseTorrent`, `ResumeTorrent`, `RemoveTorrent`, `TorrentMagnet`, `ShowTorrentFolder`. Events: `torrents:progress` (every second while the session runs), `torrents:changed`, and `app:add-torrent` (a `TorrentPreview` for the window that chooses files).
+- Commands: a magnet, a `.torrent` path or remote control's `.torrent` bytes is looked up, then opens that window; with `/n` or `/a` it is added whole to `/p` (or the download folder), started or paused.
+- Not ported: MDM's piece order (first and last pieces first, for previews), per-torrent speed limits, LSD, the network-adapter bind, debrid hand-off (step 8), Windows file associations (packaging, Phase 6), stopping the session when idle, and fetching `.torrent` files from web addresses (a browser download of one is an ordinary download for now).
+- Verified on Windows: a loopback seeder and leecher (all files, chosen files, pause and resume, a file deleted while paused, a magnet's metadata from the seeder), and the app's flow from look-up to removal. The Linux `-race` run is still to do with `internal/tools` (Docker wasn't running).
 
 Not ported: `crates/app` (their egui desktop UI), since Yellow Flash's UI is Wails + React. Port
 its *behaviour* (queues, scheduler, settings) into Go services and the React UI as each feature

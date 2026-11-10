@@ -340,7 +340,14 @@ func Start(cfg Config) (*Torrents, error) {
 		c.ListenHost = func(string) string { return "127.0.0.1" }
 		c.DisableIPv6 = true
 	}
+	// With any port (0), the TCP port picked is then asked of UDP too;
+	// Windows refuses ports in its reserved ranges (Hyper-V, Docker) with
+	// "access denied", which anacrolix doesn't try again: another pick
+	// does.
 	cl, err := bt.NewClient(c)
+	for try := 0; err != nil && cfg.Port == 0 && strings.Contains(err.Error(), "subsequent listen") && try < 20; try++ {
+		cl, err = bt.NewClient(c)
+	}
 	if err != nil {
 		_ = pc.Close()
 		return nil, err
@@ -647,16 +654,22 @@ func (s *Torrents) Remove(hash string, deleteFiles bool) error {
 	if !deleteFiles {
 		return nil
 	}
+	return RemoveFiles(it.meta, it.dir)
+}
+
+// RemoveFiles deletes a torrent's files saved in dir (its own, by their
+// names: nothing else), then its own folders left empty.
+func RemoveFiles(m Meta, dir string) error {
 	var firstErr error
-	for _, p := range it.meta.paths(it.dir) {
+	for _, p := range m.paths(dir) {
 		if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) && firstErr == nil {
 			firstErr = err
 		}
 	}
-	if it.meta.multi {
+	if m.multi {
 		// The torrent's own folders, deepest first, when they are empty.
 		var dirs []string
-		_ = filepath.WalkDir(it.meta.FolderIn(it.dir), func(p string, d os.DirEntry, err error) error {
+		_ = filepath.WalkDir(m.FolderIn(dir), func(p string, d os.DirEntry, err error) error {
 			if err == nil && d.IsDir() {
 				dirs = append(dirs, p)
 			}
