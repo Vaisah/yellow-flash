@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/vaisah/internal/infrastructure/network"
+	"github.com/vaisah/internal/tools"
 )
 
 // NetworkSettings are the connection preferences: speed limits, DNS,
@@ -103,6 +104,14 @@ func (a *App) SaveNetworkSettings(s NetworkSettings) (NetworkSettings, error) {
 
 // applyLiveSettings applies what can change while downloads run.
 func (a *App) applyLiveSettings(s NetworkSettings) {
+	// The helpers (yt-dlp, gallery-dl) take a fixed proxy through their
+	// environment; with the system's they read it themselves. A PAC script
+	// they can't follow.
+	if s.ProxyMode == "fixed" {
+		tools.SetProxy(s.ProxyURL)
+	} else {
+		tools.SetProxy("")
+	}
 	if a.manager != nil {
 		a.manager.SetSpeedLimit(s.SpeedLimitKBps << 10)
 	}

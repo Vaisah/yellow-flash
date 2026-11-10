@@ -48,6 +48,8 @@ type App struct {
 	queues     atomic.Pointer[queues.Runner]
 	dataCap    atomic.Pointer[datacap.Watcher]
 	stopQueues context.CancelFunc
+	// media holds the video and gallery downloads run by the helpers.
+	media mediaJobs
 
 	// Commands from the IPC channel wait here until the UI is ready.
 	commands chan ipc.Incoming

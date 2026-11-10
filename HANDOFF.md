@@ -253,7 +253,7 @@ is at `C:\Users\Vaisah\Videos\Go\misterdownloadmanager-main`, version 0.5.1, GPL
 | 1 ✅ | `crates/ipc` (`lib.rs`, `api.rs`) | `internal/ipc`, `internal/platform/lock*.go`, `main.go`, `commands.go` | **Done 2026-11-09**; see "Step 1 notes" below. `browsers.rs`, `capture.rs` and `extension.rs` belong to the browser host and move to step 3. |
 | 2 ✅ | `crates/engine` remainder: `hosts.rs`, `limiter.rs`, `naming.rs`, `verify.rs`, `sparse.rs`, `disk.rs` (2a); `sites/gdrive.rs`, `dns.rs`, `pac.rs`, `ftp.rs`, queues and scheduler, plus JSON storage replacing SQLite (2b) | `internal/engine`, `internal/infrastructure/{network,persistence/jsonstore}`, `internal/platform`, `internal/application/queues`, `internal/domain/queue` | **Done 2026-11-09.** See "Step 2a notes" and "Step 2b notes". |
 | 3 ✅ | `crates/nmhost` + `extension/`, `ipc`'s `browsers.rs`, `capture.rs`, `extension.rs` | `cmd/nm-host`, `extension/`, `internal/browser`, `browser_app.go` | **Done 2026-11-09.** See "Step 3 notes". |
-| 4 | `crates/tools` | `internal/tools` | yt-dlp and ffmpeg video, gallery-dl, run as separate programs, plus the adapter relay. |
+| 4 ✅ | `crates/tools` | `internal/tools`, `tools_app.go` | **Done 2026-11-10** (backend; the windows are UI work). See "Step 4 notes". |
 | 5 | `crates/torrent` | `internal/torrent` | Magnet links and .torrent files via anacrolix/torrent. |
 | 6 | `crates/remote` | `internal/remote` | Phone or LAN remote control over HTTPS with pairing. |
 | 7 | `crates/cli`, `crates/mcp` | `cmd/engine-test` → `cmd/yellowflash-cli`, `cmd/yellowflash-mcp` | Automation API. |
@@ -411,6 +411,37 @@ Four commits (3a–3d); the commit messages give the details.
 - Each request's proxy is decided once and recorded in its context, which the transport and the dial guard both read, so a PAC script can't answer differently in between. FTP never uses the proxy and stays under the dial guard.
 
 **Known flaky:** `TestConnectionReset`'s bytes-served bound fails about 1 run in 20 under load on Windows, on 0f24317 as well.
+
+### Step 4 notes (helper programs: yt-dlp, ffmpeg, gallery-dl): done 2026-11-10
+
+Seven commits (4a–4d in parts, then 4e); the commit messages give the details. Everything is in `internal/tools`; the app's bindings are in `tools_app.go`.
+
+**Installs** (`tools.go`, `openpgp.go`, `ffmpeg.go`, `gallerydl.go`, `chosen.go`)
+- yt-dlp and gallery-dl are installed only when their release's checksum list is signed by the pinned key (`internal/tools/keys`) and the program matches it. ffmpeg (BtbN's LGPL Windows build) is checked against its checksum list and GitHub's digest; BtbN signs nothing. Linux and macOS use the system's ffmpeg.
+- `openpgp.go` is a minimal port of MDM's checker on Go's standard crypto (RSA 2048–8192 bits, legacy Ed25519). MDM's release key is in `testdata/` only, to test the Ed25519 path.
+- Installs go in `<data>/tools/<tool>/<version>/`, switched atomically through `current.json`, never downgraded, with one previous version kept. The person's own copies (`tools/programs.json`) are used first and never updated.
+- `.gitattributes` keeps the keys and signed fixtures byte-exact.
+
+**Running** (`proc.go`, `proc_windows.go`, `proc_unix.go`)
+- Helpers run without a console and are ended with everything they started: a kill-on-close Job Object on Windows, the process group elsewhere.
+- Arguments go in fixed layers, CR/LF/NUL are refused, and `--` comes before the address.
+- Cookies go in a private Netscape file, never on the command line.
+- The app's fixed proxy reaches the helpers through their environment (`tools.SetProxy`, set in `applyLiveSettings`). A PAC script can't be passed on.
+- Not ported: MDM's relay through a chosen network adapter (`relay.rs`), since adapter choice isn't ported; and `update.rs` (MDM updating itself with MDM's release key). Yellow Flash's own updates are Phase 6.
+
+**Pages and downloads** (`pages.go`, `resolve.go`, `playlist.go`, `servers.go`, `video.go`, `gallery.go`)
+- What a page is (a video, a gallery, a list), the choices it offers, and lists listed lazily.
+- Video downloads with media-server fall-over, the nearest-quality fallback, subtitles retried once, and MP3, Opus and FLAC conversions.
+- Galleries into their own folder.
+- yt-dlp's marker lines are `YFP`/`YFF`/`YFQ` (MDM's `MDMP`/`MDMF`/`MDMQ`).
+- The tests drive the test binary as a fake yt-dlp and gallery-dl.
+
+**App** (`tools_app.go`)
+- Bindings: `GetHelpers`, `InstallHelper` (events `helpers:progress`), `ChooseHelper`, `ForgetHelper`, `LookUpVideo`, `StartVideoDownload`, `StartGalleryDownload`, `ListMediaDownloads`, `StopMediaDownload` (events `media:progress`, `media:changed`).
+- Video and gallery downloads are kept in memory for the session; giving them rows in the saved download list is still to do.
+- Still refused from the browser: video pages and link lists, until the video and link windows exist (accepting them now would lose them). When they come, check a browser-sent page's host as the restricted client does before handing it to yt-dlp, which has no such guard.
+- Playlists (`tools.StartListing`) have no binding yet: they need the list window.
+- The Linux `-race` run of `internal/tools` is still to do (Docker wasn't running); every test passes on Windows, and `vet` passes for Linux and macOS.
 
 Not ported: `crates/app` (their egui desktop UI), since Yellow Flash's UI is Wails + React. Port
 its *behaviour* (queues, scheduler, settings) into Go services and the React UI as each feature
