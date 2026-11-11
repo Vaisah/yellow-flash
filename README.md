@@ -24,6 +24,9 @@ wails build      # produces build/bin/Yellow Flash.exe (icon from build/appicon.
 - **Retries.** Delays grow exponentially with random jitter, and the server's `Retry-After` is respected for 429 and 503. Timeouts, connection resets, other network errors, and HTTP statuses are classified separately so the engine knows which to retry.
 - **Integrity.** Before publishing, the engine checks the final size and any digest the server advertises (`Repr-Digest`, `Digest`, `Content-MD5`, `Content-Digest`). The finished file never overwrites an existing one; a name clash is published as `name (1).ext`.
 - **Debrid accounts.** With your own Real-Debrid, AllDebrid or Premiumize account, file-host links come through the service's direct links, and torrents can go to the account, so no peer ever connects to this computer. Sign-ins are kept in the system keychain, never in Yellow Flash's files.
+- **Archives.** Finished archives can be extracted safely (zip, tar, gz, xz in the app; 7z, RAR and encrypted zips through an installed 7-Zip), with every path checked and nothing overwritten.
+- **Server location.** Each download remembers where its server is: the country (DB-IP's table, looked up on this computer), how far, a CDN or proxy. IP Geolocation by DB-IP.
+- **Crash reports.** A crash becomes a report at the next start, with the home folder hidden; sending it opens GitHub's form for you to submit.
 - **Progress.** Speed is an exponential moving average. The engine reports average speed, ETA (only when it is known), and active connections, at most every 250 ms.
 - **Security.**
   - URLs and redirect targets are validated.
@@ -106,6 +109,9 @@ internal/
   infrastructure/persistence/memory   non-durable domain.Store
   platform                 SecretStore, and the system keychain (Windows Credential Manager, Secret Service)
   debrid                   debrid service accounts: unlocking links, sign-in, torrents through the account
+  extract                  safe archive extraction (in process, or through 7-Zip)
+  geo                      a server address's country (DB-IP's offline table) and flags
+  crash                    the rolling log and crash reports
 tests/integration          end-to-end scenarios
 ```
 

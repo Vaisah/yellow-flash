@@ -258,7 +258,7 @@ is at `C:\Users\Vaisah\Videos\Go\misterdownloadmanager-main`, version 0.5.1, GPL
 | 5 ✅ | `crates/torrent`, and `crates/app/src/torrents.rs`'s list, sharing limits and blocklist | `internal/torrent`, `torrents_app.go` | **Done 2026-11-10** (backend; the torrent windows are UI work). See "Step 5 notes". |
 | 6 ✅ | `crates/remote`, and the app's answers to it | `internal/remote`, `remote_app.go` | **Done 2026-11-10** (backend; Options → Remote is UI work). See "Step 6 notes". |
 | 7 ✅ | `crates/cli`, `crates/mcp`, and the app's automation API answers | `cmd/yellowflash-cli` (replaced `cmd/engine-test`), `cmd/yellowflash-mcp`, `api_app.go` | **Done 2026-11-10.** See "Step 7 notes". |
-| 8 | `crates/debrid`, `crates/extract`, `crates/geo`, `crates/crash` | `internal/debrid`, `internal/platform/keychain*`, `debrid_app.go`, `debrid_torrents_app.go`; `internal/...` | **Debrid done 2026-11-10** (8a–8e, see "Step 8 notes"). Archive extraction, server location, crash reports to do. |
+| 8 ✅ | `crates/debrid`, `crates/extract`, `crates/geo`, `crates/crash` | `internal/debrid`, `internal/extract`, `internal/geo`, `internal/crash`, `internal/platform/{keychain,mark,trash}*`; `debrid_app.go`, `debrid_torrents_app.go`, `extract_app.go`, `geo_app.go`, `crash_app.go` | **Done 2026-11-11** (backend; their windows are UI work). See "Step 8 notes". |
 | 9 | `crates/labserver` | `tests/lab` | Their fault-injecting HTTP/FTP server; merge it with our `fileServer`. |
 
 ### Step 1 notes (`internal/ipc`)
@@ -534,6 +534,22 @@ Five commits (8a the engine's hook, 8b the services, 8c torrents through them, 8
 - With "torrents through the account" on, a magnet or `.torrent` sent to the app (command line, browser, remote control) goes to the account; no SOCKS5 proxy is needed. Its list is `<data>/debrid/torrents.json`; one the app was running continues at the next start.
 - Not ported: the UI (Options → Debrid, the torrent rows), per-download "through …" choice in File Properties, the event-log window (notes go to the log and the torrent's own notes).
 - Verified on Windows (the real Credential Manager included). The Linux keychain is compiled and vetted; its live test and the `-race` runs wait for the VM.
+
+**Archives** (`internal/extract`, `extract_app.go`; step 8f)
+- In process: zip (stored, Deflate, byte-split `.zip.001`), tar, `.tar.gz`, `.tar.xz`, a single `.gz`/`.xz` (`github.com/ulikunitz/xz`). Through an installed 7-Zip, run as its own program: 7z (split too), RAR, and the zips Go's reader can't open (encrypted, Deflate64). MDM decodes AES and Deflate64 zips itself; Go's `archive/zip` can't, so those need 7-Zip here.
+- Every entry's path is checked (no `..`, drive or stream name; nothing written through a link; links and devices left out), with limits (200 × the archive or 20 GiB, no more than the disk's free space; 100 000 entries; 64 levels) and overlapping zip entries refused. Everything goes into a staging folder first, then into place without overwriting ("smart" / always / never a folder named after the archive).
+- The app extracts an archive when its download (a split one's last volume) completes, with Options → Archives on (`extract.settings`: auto, into, deleteArchive, sevenZip), or by hand (`ExtractDownload(id, password)`); "extract:done" says how (a password needed, 7-Zip missing, …). Each file gets the archive's Mark of the Web (`platform.MarkFromInternet`; `user.xdg.origin.url` on Linux); the archive may go to the Recycle Bin / Trash (`platform.Trash`).
+- Not ported: Link grabber packages (their own extract and password choices), the password and "7-Zip needed" windows (UI).
+
+**Server location** (`internal/geo`, `network/server.go`, `geo_app.go`; step 8g)
+- Each download keeps what it learnt of its server (`Download.Server`): the address that answered, the quickest TCP connect as the round trip, whether a proxy carried it, and the CDN its headers name.
+- `geo.Lookup` places the address in a country from DB-IP's IP to Country Lite table (CC BY 4.0, "IP Geolocation by DB-IP"), on this computer only; flags from flag-icons (MIT). `ServerLocation(id)` and `FlagsPicture()` are the window's; DB-IP's credit is in the answer.
+
+**Crash reports** (`internal/crash`, `crash_app.go`; step 8h)
+- MDM's out-of-process minidumps have no Go equivalent; instead `debug.SetCrashOutput` (installed in `main.go` right after the instance lock) makes the runtime write an unrecovered panic's or a fatal error's stacks to `<data>/crashes/pending.log`, and the next start makes it a report (`<kind>-<time>.txt`, with the raw `.log`). A fatal error's own message line goes to stderr only, so its report says where from the stack.
+- The app and the engine log to `<data>/logs/yellowflash.log` (rolled at 2 MiB, 3 kept; `YELLOWFLASH_LOG=debug`); a report takes its last 150 lines. The home folder shows as `~`.
+- Bindings: `LastCrashReport` (once), `ListCrashReports`, `CrashIssueURL` (GitHub's Crash report form, `.github/ISSUE_TEMPLATE/crash.yml`, filled in and cut to fit; the user submits it), `FindCrashIssue` (sends only the signature, when asked), `DeleteCrashReport`, `ShowCrashReports`.
+- Not ported: freeze detection (MDM's window watchdog; a Wails webview gives the Go side no equivalent), symbol fetching and `mdm-symbolicate` (Go's stacks are named already).
 
 Not ported: `crates/app` (their egui desktop UI), since Yellow Flash's UI is Wails + React. Port
 its *behaviour* (queues, scheduler, settings) into Go services and the React UI as each feature
