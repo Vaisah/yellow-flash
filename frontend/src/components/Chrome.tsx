@@ -343,17 +343,27 @@ export function Sidebar({
               </span>
               <span className="nav-group-title">All Downloads</span>
             </div>
-            <button
-              type="button"
+            {/* A button can't hold another button: the toggle is a span that acts as one. */}
+            <span
+              role="button"
+              tabIndex={0}
               className="chevron-btn"
               onClick={(e) => {
                 e.stopPropagation()
                 setAllOpen(!allOpen)
               }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  setAllOpen(!allOpen)
+                }
+              }}
               aria-label="Toggle all downloads"
+              aria-expanded={allOpen}
             >
               {allOpen ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
-            </button>
+            </span>
           </button>
 
           {allOpen && (
@@ -503,19 +513,22 @@ export function Sidebar({
 /* ------------------------------------------------------------------ */
 
 interface StatusBarProps {
+  /** Every download's speed together, bytes/s. */
   totalSpeed: number
+  /** The torrents' upload, bytes/s. */
+  uploadSpeed?: number
   allSelected: boolean
   onToggleSelectAll: () => void
 }
 
 export function StatusBar({
   totalSpeed,
+  uploadSpeed = 0,
   allSelected,
   onToggleSelectAll,
 }: StatusBarProps) {
-  // Compute download speed and estimated upload speed (as seen in mockup: e.g. 10.55 Mbs / 6.30 Mbs)
-  const dlSpeedFormatted = totalSpeed > 0 ? formatMbs(totalSpeed) : '10.55 Mbs'
-  const ulSpeedFormatted = totalSpeed > 0 ? formatMbs(totalSpeed * 0.58) : '6.30 Mbs'
+  const dlSpeedFormatted = formatMbs(Math.max(0, totalSpeed))
+  const ulSpeedFormatted = formatMbs(Math.max(0, uploadSpeed))
 
   return (
     <footer className="app-footer">
@@ -548,7 +561,7 @@ export function StatusBar({
         <div className="speed-test-icon-wrap">
           <Gauge size={16} className="speed-gauge-icon" />
         </div>
-        <span className="speed-test-label">Speed Test :</span>
+        <span className="speed-test-label">Speed :</span>
         <span className="speed-metric speed-down">
           <span className="arrow-down">↓</span> {dlSpeedFormatted}
         </span>

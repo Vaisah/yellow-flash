@@ -22,6 +22,8 @@ export interface Download {
   retries: number
   status: Status
   queueId?: string
+  /** Where its answers came from (its last run's). */
+  server?: ServerInfo
   createdAt: string
   startedAt: string
   completedAt: string
@@ -74,6 +76,120 @@ export interface AddRequest {
   filename: string
   connections: number
   start: boolean
+  /** The server's login (kept in memory only). */
+  username?: string
+  password?: string
+}
+
+export interface ServerInfo {
+  ip?: string
+  rttMs?: number
+  proxied?: boolean
+  cdn?: string
+}
+
+/** Mirrors main.ServerLocation. */
+export interface ServerLocation {
+  place: 'country' | 'this-computer' | 'local-network' | 'unknown'
+  ip?: string
+  country?: string
+  flag?: { x: number; y: number; w: number; h: number }
+  rttMs?: number
+  reach?: 'near' | 'medium' | 'far' | ''
+  proxied?: boolean
+  cdn?: string
+  attribution: string
+  attributionUrl: string
+}
+
+/* ---------- queues (mirrors queue.Queue / main.QueueView) ---------- */
+
+export interface TimeOfDay { hour: number; minute: number; second: number }
+export interface QueueDate { year: number; month: number; day: number }
+
+export interface Schedule {
+  startOnStartup?: boolean
+  startAt?: TimeOfDay | null
+  days: boolean[]
+  stopAt?: TimeOfDay | null
+  once?: QueueDate | null
+  retries?: number | null
+  openWhenDone?: string
+  exitWhenDone?: boolean
+  turnOff?: '' | 'shutdown' | 'sleep' | 'hibernate'
+  forceClose?: boolean
+  wake?: boolean
+}
+
+export interface Queue {
+  id: string
+  name: string
+  filesAtOnce: number
+  items: string[]
+  sync?: boolean
+  schedule: Schedule
+  createdAt: string
+  running: boolean
+  builtin: boolean
+}
+
+/* ---------- the other dialogs ---------- */
+
+export interface DiskInfo { dir: string; free: number; total: number; usedPercent: number }
+export interface CleanResult { files: number; bytes: number }
+export interface SpeedLimit { enabled: boolean; kbps: number }
+export interface SiteLogin { site: string; user: string }
+
+/** Options → General and File Types (main.Options). */
+export interface Options {
+  launchOnStartup: boolean
+  showComplete: boolean
+  browserCapture: boolean
+  fileTypes: string
+}
+
+/** Mirrors main.NetworkSettings (only what the dialogs read). */
+export interface NetworkSettings {
+  speedLimitKBps: number
+  dataCapEnabled: boolean
+  dataCapMB: number
+  dataCapHours: number
+  [key: string]: unknown
+}
+
+/** A way to download a video (tools.Choice). */
+export interface VideoChoice { label: string; selector: string; ext: string; size: number }
+
+export interface VideoLookUp {
+  title: string
+  duration: number
+  choices: VideoChoice[] | null
+  subs: unknown[] | null
+  needsFfmpeg: boolean
+  list?: { title: string; total: number } | null
+}
+
+export interface HelperInfo { name: string; version: string; exe: string; chosen: boolean }
+
+export interface MediaProgress {
+  state: 'running' | 'done' | 'failed' | 'stopped'
+  file?: string
+  error?: string
+  downloaded: number
+  total: number
+  speed: number
+}
+
+export interface MediaRow { id: string; kind: 'video' | 'gallery'; title: string; url: string; progress: MediaProgress }
+
+export interface ExtractResult {
+  id: string
+  archive: string
+  ok: boolean
+  report?: { folder: string; files: number; bytes: number; renamed: number; skipped?: { name: string; why: string }[] }
+  error?: string
+  reason?: string
+  trashed?: boolean
 }
 
 export interface AppInfo {

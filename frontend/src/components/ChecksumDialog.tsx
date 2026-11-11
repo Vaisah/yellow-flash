@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Check, CheckCircle2, Copy, FileCheck, Hash, ShieldAlert, ShieldCheck } from 'lucide-react'
 import { Modal } from './Modal'
-import { copyText } from '../api'
+import { backend, copyText, errorMessage } from '../api'
 import type { Download } from '../types'
 
 interface Props {
@@ -15,25 +15,19 @@ export function ChecksumDialog({ download, onClose }: Props) {
   const [calculatedHash, setCalculatedHash] = useState('')
   const [isCalculating, setIsCalculating] = useState(true)
   const [copied, setCopied] = useState(false)
+  const [calcError, setCalcError] = useState('')
 
-  // Simulate or compute checksum calculation
+  // The file's hash, computed by the backend (it reads the whole file).
   useEffect(() => {
+    let current = true
     setIsCalculating(true)
-    const timer = setTimeout(() => {
-      // Deterministic mock hash based on filename and size
-      let mock = ''
-      if (algo === 'md5') {
-        mock = '7d2b512c1b48981f33f114c2b' + (download.filename.length * 37).toString(16).padEnd(7, '9')
-      } else if (algo === 'sha1') {
-        mock = '2fd4e1c67a2d28fced849ee1bb76e7391b93eb12'
-      } else {
-        mock = 'a591a6d40bf420404a011733cfb7b190d62c65bf0bcda32b57b277d9ad9f146e'
-      }
-      setCalculatedHash(mock)
-      setIsCalculating(false)
-    }, 450)
-    return () => clearTimeout(timer)
-  }, [download.filename, download.size, algo])
+    setCalcError('')
+    backend().FileChecksum(download.id, algo)
+      .then((h) => { if (current) setCalculatedHash(h) })
+      .catch((e) => { if (current) { setCalculatedHash(''); setCalcError(errorMessage(e)) } })
+      .finally(() => { if (current) setIsCalculating(false) })
+    return () => { current = false }
+  }, [download.id, algo])
 
   const cleanExpected = expectedHash.trim().toLowerCase()
   const cleanCalculated = calculatedHash.trim().toLowerCase()
@@ -107,7 +101,7 @@ export function ChecksumDialog({ download, onClose }: Props) {
           <div className="input-with-button">
             <input
               readOnly
-              value={isCalculating ? 'Computing hash...' : calculatedHash}
+              value={isCalculating ? 'Computing hash...' : calcError ? `Could not compute it: ${calcError}` : calculatedHash}
               className="field-mono readonly"
             />
             <button
@@ -122,7 +116,7 @@ export function ChecksumDialog({ download, onClose }: Props) {
         </div>
 
         {/* Verdict Badge */}
-        {cleanExpected.length > 0 && !isCalculating && (
+        {cleanExpected.length > 0 && !isCalculating && !calcError && (
           <div className={`checksum-verdict ${isMatch ? 'match' : 'mismatch'}`}>
             {isMatch ? (
               <>

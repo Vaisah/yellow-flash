@@ -5,7 +5,58 @@ import { iconFor } from '../lib/categories'
 import { explainError } from '../lib/errors'
 import { formatBytes, formatDate, formatEta, formatSpeed, percentOf } from '../lib/format'
 import { isActive } from '../types'
-import type { Download, Progress, Segment } from '../types'
+import type { Download, Progress, Segment, ServerLocation } from '../types'
+
+/** The flags' picture, asked of the backend once. */
+let flagsPicture: Promise<string> | null = null
+
+function countryName(code: string): string {
+  try {
+    return new Intl.DisplayNames([navigator.language || 'en'], { type: 'region' }).of(code) ?? code
+  } catch {
+    return code
+  }
+}
+
+/** Where the download's server is: its flag and country (DB-IP's table, looked up on this computer), how far. */
+function ServerPlace({ d }: { d: Download }) {
+  const [loc, setLoc] = useState<ServerLocation | null>(null)
+  const [flags, setFlags] = useState('')
+  useEffect(() => {
+    let current = true
+    backend().ServerLocation(d.id).then((l) => { if (current) setLoc(l) }).catch(() => undefined)
+    return () => { current = false }
+  }, [d.id, d.server?.ip, d.server?.rttMs])
+  useEffect(() => {
+    if (!loc?.flag) return
+    flagsPicture ??= backend().FlagsPicture()
+    flagsPicture.then(setFlags).catch(() => undefined)
+  }, [loc?.flag])
+  if (!loc) return <>—</>
+  const place = loc.place === 'country' && loc.country ? countryName(loc.country)
+    : loc.place === 'this-computer' ? 'This computer'
+    : loc.place === 'local-network' ? 'The local network' : 'Unknown'
+  const via = [loc.cdn && `via ${loc.cdn}`, loc.proxied && 'through a proxy'].filter(Boolean).join(', ')
+  const tip = [loc.ip, via, loc.place === 'country' ? `${loc.attribution} (${loc.attributionUrl})` : ''].filter(Boolean).join(' · ')
+  return (
+    <span title={tip} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+      {loc.flag && flags && (
+        <span
+          aria-hidden="true"
+          style={{
+            width: 20, height: 15, display: 'inline-block', borderRadius: 2,
+            backgroundImage: `url(${flags})`,
+            backgroundPosition: `-${loc.flag.x * 20 / loc.flag.w}px -${loc.flag.y * 15 / loc.flag.h}px`,
+            backgroundSize: `${16 * 20}px auto`,
+          }}
+        />
+      )}
+      {place}
+      {loc.rttMs ? ` · ${loc.reach} (${loc.rttMs} ms)` : ''}
+      {via ? ` · ${via}` : ''}
+    </span>
+  )
+}
 import { statusLabel } from './DownloadTable'
 
 interface Props {
@@ -82,6 +133,7 @@ export function DetailsPanel({ download: d, progress: p, onCollapse, onOpenFile,
         <div><dt>Connections</dt><dd>{p ? `${p.activeConnections} active of ${d.connections}` : d.connections}</dd></div>
         <div><dt>Resume</dt><dd>{d.status === 'QUEUED' ? 'Not checked yet' : d.rangeSupported ? 'Supported' : 'Not supported'}</dd></div>
         <div><dt>Retries</dt><dd>{d.retries}</dd></div>
+        <div><dt>Server</dt><dd>{d.server ? <ServerPlace d={d} /> : '—'}</dd></div>
         <div><dt>Added</dt><dd>{formatDate(d.createdAt)}</dd></div>
         <div><dt>Finished</dt><dd>{formatDate(d.completedAt)}</dd></div>
         <div className="wide"><dt>Saved to</dt><dd className="mono" title={d.destination}>{d.destination}</dd></div>

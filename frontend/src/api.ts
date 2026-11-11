@@ -30,6 +30,17 @@ export function onNotice(cb: (n: Notice) => void): () => void {
   return window.runtime?.EventsOn('app:notice', cb) ?? (() => {})
 }
 
+/** Any backend event ("media:progress", "extract:done", "torrents:progress", …). */
+export function onEvent<T = unknown>(name: string, cb: (data: T) => void): () => void {
+  return window.runtime?.EventsOn(name, cb) ?? (() => {})
+}
+
+/** Opens an address in the system's browser. */
+export function openInBrowser(url: string): void {
+  if (window.runtime?.BrowserOpenURL) window.runtime.BrowserOpenURL(url)
+  else window.open(url, '_blank', 'noopener')
+}
+
 /** Wails rejects with plain strings; normalise to a message. */
 export function errorMessage(e: unknown): string {
   if (typeof e === 'string') return e

@@ -22,7 +22,7 @@ func volumeOf(dir string) (Volume, bool) {
 		block = uint64(st.Bsize)
 	}
 	// The blocks a program may use, without the reserve kept for root.
-	return Volume{Free: st.Bavail * block, FileSystem: linuxFileSystems[int64(st.Type)]}, true
+	return Volume{Free: st.Bavail * block, Total: st.Blocks * block, FileSystem: linuxFileSystems[int64(st.Type)]}, true
 }
 
 // linuxFileSystems names statfs magic numbers: the FAT check needs vfat's,

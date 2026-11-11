@@ -94,6 +94,10 @@ type AddRequest struct {
 	Filename    string `json:"filename"`
 	Connections int    `json:"connections"`
 	Start       bool   `json:"start"`
+	// Username and Password are the server's login ("": none, or the
+	// site's saved one). Kept only in memory, never in the list.
+	Username string `json:"username,omitempty"`
+	Password string `json:"password,omitempty"`
 }
 
 // AppInfo describes the running application.
@@ -297,6 +301,16 @@ func (a *App) AddDownload(req AddRequest) (domain.Download, error) {
 		return domain.Download{}, err
 	}
 	create := domain.CreateRequest{URL: req.URL, Directory: req.Directory, Filename: req.Filename, Connections: req.Connections}
+	// The server's login: the one typed, else the site's saved one.
+	auth := ""
+	if strings.TrimSpace(req.Username) != "" {
+		auth = basicAuth(strings.TrimSpace(req.Username), req.Password)
+	} else {
+		auth = a.loginFor(req.URL)
+	}
+	if auth != "" {
+		create.Headers = map[string]string{"Authorization": auth}
+	}
 	var (
 		d   *domain.Download
 		err error

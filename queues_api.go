@@ -18,13 +18,29 @@ func (a *App) runner() (*queues.Runner, error) {
 	return nil, errNoQueues
 }
 
+// QueueView is a queue for the window, with whether it runs (Queue's own
+// Running isn't sent).
+type QueueView struct {
+	queue.Queue
+	Running bool `json:"running"`
+	// Builtin: the main and synchronization queues, which can't be deleted.
+	Builtin bool `json:"builtin"`
+}
+
 // ListQueues returns every queue in order, with whether it runs.
-func (a *App) ListQueues() ([]queue.Queue, error) {
+func (a *App) ListQueues() ([]QueueView, error) {
 	r, err := a.runner()
 	if err != nil {
 		return nil, err
 	}
-	return r.Queues(), nil
+	out := []QueueView{}
+	for _, q := range r.Queues() {
+		if q.Items == nil {
+			q.Items = []string{} // the window reads an empty queue's list, not null
+		}
+		out = append(out, QueueView{Queue: q, Running: q.Running, Builtin: q.Builtin()})
+	}
+	return out, nil
 }
 
 // CreateQueue adds a queue.

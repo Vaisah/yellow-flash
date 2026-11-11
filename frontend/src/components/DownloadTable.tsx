@@ -3,10 +3,12 @@ import type { MouseEvent as ReactMouseEvent } from 'react'
 import {
   ArrowDown,
   ArrowUp,
+  Archive,
   Copy,
   ExternalLink,
   FileCheck,
   FolderOpen,
+  Layers,
   Pause,
   Play,
   RotateCcw,
@@ -17,6 +19,12 @@ import { categoryLabel, iconFor } from '../lib/categories'
 import { formatBytes, formatDate, formatEta, percentOf, parseTime } from '../lib/format'
 import { canCancel, canDelete, canPause, canResume } from '../types'
 import type { Download, Progress } from '../types'
+
+/** An archive's name (or one volume of one), as the backend extracts them. */
+function isArchive(name: string): boolean {
+  const n = name.toLowerCase()
+  return /\.(zip|7z|rar|tar|tgz|gz|txz|xz)$/.test(n) || /\.r\d\d$/.test(n) || /\.(7z|zip)\.\d{3}$/.test(n)
+}
 
 export type SortKey = 'name' | 'size' | 'progress' | 'eta' | 'added'
 export interface Sort {
@@ -48,6 +56,10 @@ export interface RowActions {
   showInFolder(d: Download): void
   copyLink(d: Download): void
   verifyChecksum?(d: Download): void
+  /** Extract a finished archive. */
+  extract?(d: Download): void
+  /** Put it at the end of the main queue. */
+  addToQueue?(d: Download): void
 }
 
 interface Props {
@@ -347,6 +359,26 @@ export function DownloadTable({
           >
             <FileCheck size={14} /> Verify checksum (MD5/SHA256)...
           </button>
+          {actions.extract && isArchive(menu.d.filename) && (
+            <button
+              type="button"
+              role="menuitem"
+              disabled={menu.d.status !== 'COMPLETED'}
+              onClick={run((d) => actions.extract?.(d))}
+            >
+              <Archive size={14} /> Extract archive
+            </button>
+          )}
+          {actions.addToQueue && (
+            <button
+              type="button"
+              role="menuitem"
+              disabled={menu.d.status === 'COMPLETED' || !!menu.d.queueId}
+              onClick={run((d) => actions.addToQueue?.(d))}
+            >
+              <Layers size={14} /> Add to Main Queue
+            </button>
+          )}
           <hr />
           <button
             type="button"

@@ -15,6 +15,8 @@ type Volume struct {
 	// this user: Windows GetDiskFreeSpaceEx (quotas included), Unix statfs's
 	// blocks available to non-root programs.
 	Free uint64
+	// Total is the volume's size, as this user sees it (0: unknown).
+	Total uint64
 	// FileSystem is the system's name for it ("NTFS", "FAT32", "exFAT";
 	// "ext4", "vfat"), or "" when it cannot tell.
 	FileSystem string

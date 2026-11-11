@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { DragEvent } from 'react'
 import { CheckCircle2, CircleAlert, Info, Plus, X } from 'lucide-react'
-import { backend, copyText, errorMessage, onAddRequest, onNotice } from './api'
+import { backend, copyText, errorMessage, onAddRequest, onEvent, onNotice } from './api'
 import { useDownloads } from './hooks/useDownloads'
 import { CATEGORIES, categoryOf } from './lib/categories'
 import type { Category } from './lib/categories'
 import { explainError } from './lib/errors'
+import { formatBytes } from './lib/format'
 import { Sidebar, StatusBar, Toolbar } from './components/Chrome'
 import type { StatusFilter } from './components/Chrome'
 import { DownloadTable, sortRows } from './components/DownloadTable'
@@ -18,7 +19,7 @@ import { ChecksumDialog } from './components/ChecksumDialog'
 import { SpeedLimiterDialog } from './components/SpeedLimiterDialog'
 import { MediaGrabberDialog } from './components/MediaGrabberDialog'
 import { canCancel, canDelete, canPause, canResume, isActive } from './types'
-import type { AppInfo, Download, Settings } from './types'
+import type { AppInfo, DiskInfo, Download, ExtractResult, MediaRow, Settings } from './types'
 import logo from './assets/yellow-flash-256.png'
 
 type Dialog =
@@ -83,6 +84,10 @@ export default function App() {
   const [dragging, setDragging] = useState(false)
   const [speedLimitEnabled, setSpeedLimitEnabled] = useState(false)
   const [speedLimitKbps, setSpeedLimitKbps] = useState(2048)
+  const [disk, setDisk] = useState<DiskInfo | null>(null)
+  const [uploadSpeed, setUploadSpeed] = useState(0)
+  const showComplete = useRef(true)
+  const statuses = useRef<Map<string, Download['status']>>(new Map())
   const searchRef = useRef<HTMLInputElement>(null)
   const toastId = useRef(0)
   const addSeq = useRef(0)
@@ -98,7 +103,46 @@ export default function App() {
     window.runtime?.WindowSetMinSize?.(880, 560)
     backend().GetSettings().then(setSettings).catch((e) => toast('error', `Could not load settings: ${errorMessage(e)}`))
     backend().Info().then(setInfo).catch(() => undefined)
+    backend().GetSpeedLimit().then((l) => { setSpeedLimitEnabled(l.enabled); setSpeedLimitKbps(l.kbps) }).catch(() => undefined)
+    backend().GetOptions().then((o) => { showComplete.current = o.showComplete }).catch(() => undefined)
   }, [toast])
+
+  /* The download folder's disk, now and every 30 s. */
+  const refreshDisk = useCallback(() => {
+    backend().DiskSpace(settings.downloadDirectory).then(setDisk).catch(() => setDisk(null))
+  }, [settings.downloadDirectory])
+  useEffect(() => {
+    refreshDisk()
+    const timer = window.setInterval(refreshDisk, 30_000)
+    return () => window.clearInterval(timer)
+  }, [refreshDisk])
+
+  /* Torrents' upload, for the status bar. */
+  useEffect(() => onEvent<{ stats: { upSpeed: number } }[]>('torrents:progress', (rows) =>
+    setUploadSpeed((rows ?? []).reduce((sum, r) => sum + (r.stats?.upSpeed > 0 ? r.stats.upSpeed : 0), 0))), [])
+
+  /* Video downloads (yt-dlp) end outside the list: said in a toast. */
+  useEffect(() => onEvent<string>('media:changed', (id) => {
+    backend().ListMediaDownloads().then((rows: MediaRow[]) => {
+      const r = rows.find((x) => x.id === id)
+      if (r?.progress.state === 'done') toast('ok', `Video saved: ${r.title}`)
+      else if (r?.progress.state === 'failed') toast('error', `Could not download the video ${r.title}: ${r.progress.error ?? ''}`)
+    }).catch(() => undefined)
+  }), [toast])
+
+  /* An archive extracted, or not: a password is asked when it needs one. */
+  useEffect(() => onEvent<ExtractResult>('extract:done', (r) => {
+    const name = r.archive.split(/[\\/]/).pop() ?? r.archive
+    if (r.ok && r.report) {
+      toast('ok', `Extracted ${r.report.files} file(s) from ${name}`)
+    } else if (r.reason === 'password' || r.reason === 'wrong-password') {
+      const pw = window.prompt(r.reason === 'wrong-password' ? `Wrong password for ${name}. Type it again:` : `${name} is protected by a password:`)
+      if (pw) backend().ExtractDownload(r.id, pw).catch((e) => toast('error', `Could not extract ${name}: ${errorMessage(e)}`))
+    } else if (r.reason === 'no-7zip') {
+      toast('error', `${name} needs 7-Zip to be extracted: install it from 7-zip.org, then choose Extract again.`)
+    }
+    refreshDisk()
+  }), [toast, refreshDisk])
 
   /* Commands from a second launch (IDM-style command line). */
   useEffect(() => onAddRequest((p) => setDialog({
@@ -139,6 +183,21 @@ export default function App() {
       setSelectedId(rows[0].id)
     }
   }, [rows, selectedId])
+
+  /* A download that finishes while the app runs opens the Download Complete window (Options → General). */
+  useEffect(() => {
+    const seen = statuses.current
+    let finished: Download | null = null
+    for (const d of items) {
+      const before = seen.get(d.id)
+      if (before && before !== 'COMPLETED' && d.status === 'COMPLETED') finished = d
+      seen.set(d.id, d.status)
+    }
+    if (finished && showComplete.current) {
+      const d = finished
+      setDialog((cur) => cur ?? { kind: 'complete', d })
+    }
+  }, [items])
 
   const selected = items.find((d) => d.id === selectedId) ?? null
   const totalSpeed = Object.values(progress).reduce((sum, p) => sum + (p.speed > 0 ? p.speed : 0), 0)
@@ -186,6 +245,8 @@ export default function App() {
     showInFolder: (d) => void call(() => backend().ShowInFolder(d.id), 'Could not open the folder'),
     copyLink: (d) => void call(async () => { await copyText(d.url); toast('info', 'Link copied to clipboard') }, 'Could not copy'),
     verifyChecksum: (d) => setDialog({ kind: 'checksum', d }),
+    extract: (d) => void call(async () => { await backend().ExtractDownload(d.id, ''); toast('info', `Extracting ${d.filename}…`) }, 'Could not extract'),
+    addToQueue: (d) => void call(async () => { await backend().AddToQueue('main', [d.id]); toast('ok', `${d.filename} added to the main queue`) }, 'Could not add it to the queue'),
   }), [call, toast])
 
   const openAdd = useCallback(async (prefill?: string) => {
@@ -229,8 +290,14 @@ export default function App() {
     setSort((s) => (s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: key === 'name' ? 'asc' : 'desc' }))
 
   const handleCleanDisk = useCallback(() => {
-    toast('ok', 'Disk cleaned: 340 MB of temporary cache and obsolete logs cleared')
-  }, [toast])
+    void call(async () => {
+      const r = await backend().CleanDisk()
+      toast(r.files > 0 ? 'ok' : 'info', r.files > 0
+        ? `Disk cleaned: ${formatBytes(r.bytes)} of leftover download data removed`
+        : 'Nothing to clean: no leftover download data')
+      refreshDisk()
+    }, 'Could not clean the disk')
+  }, [call, toast, refreshDisk])
 
   /* ---------- keyboard and drag & drop ---------- */
 
@@ -334,7 +401,7 @@ export default function App() {
           onCategory={setCategory}
           onStatus={setStatusFilter}
           downloadDirectory={settings.downloadDirectory || 'C:\\Downloads'}
-          diskPercent={90}
+          diskPercent={disk && disk.usedPercent >= 0 ? disk.usedPercent : 0}
           onCleanDisk={handleCleanDisk}
         />
         <main className="main">
@@ -390,6 +457,7 @@ export default function App() {
 
       <StatusBar
         totalSpeed={totalSpeed}
+        uploadSpeed={uploadSpeed}
         allSelected={allSelected}
         onToggleSelectAll={onToggleSelectAll}
       />
@@ -415,7 +483,12 @@ export default function App() {
           settings={settings}
           info={info}
           onClose={() => setDialog(null)}
-          onSaved={(s) => { setSettings(s); setDialog(null); toast('ok', 'Settings saved') }}
+          onSaved={(s) => {
+            setSettings(s)
+            setDialog(null)
+            toast('ok', 'Settings saved')
+            backend().GetOptions().then((o) => { showComplete.current = o.showComplete }).catch(() => undefined)
+          }}
         />
       )}
       {dialog?.kind === 'delete' && (
@@ -439,8 +512,8 @@ export default function App() {
         <SchedulerDialog
           downloads={items}
           onClose={() => setDialog(null)}
-          onStartQueue={(qid) => toast('ok', `Queue "${qid}" started`)}
-          onStopQueue={(qid) => toast('info', `Queue "${qid}" stopped`)}
+          onStartQueue={(name) => toast('ok', `Queue "${name}" started`)}
+          onStopQueue={(name) => toast('info', `Queue "${name}" stopped`)}
         />
       )}
       {dialog?.kind === 'batch' && (
@@ -452,9 +525,7 @@ export default function App() {
       {dialog?.kind === 'media' && (
         <MediaGrabberDialog
           onClose={() => setDialog(null)}
-          onAddStream={(url, quality, start) => {
-            toast('ok', `Video stream (${quality}) added to downloads ${start ? '(downloading)' : ''}`)
-          }}
+          onStarted={(title, quality) => toast('ok', `Downloading the video ${title} (${quality})`)}
         />
       )}
       {dialog?.kind === 'speed' && (
@@ -462,11 +533,12 @@ export default function App() {
           currentLimitKbps={speedLimitKbps}
           isEnabled={speedLimitEnabled}
           onClose={() => setDialog(null)}
-          onSave={(enabled, limit) => {
-            setSpeedLimitEnabled(enabled)
-            setSpeedLimitKbps(limit)
-            toast('ok', enabled ? `Speed limited to ${limit} KB/s` : 'Speed limiter disabled (maximum speed)')
-          }}
+          onSave={(enabled, limit) => void call(async () => {
+            const l = await backend().SetSpeedLimit({ enabled, kbps: limit })
+            setSpeedLimitEnabled(l.enabled)
+            setSpeedLimitKbps(l.kbps)
+            toast('ok', l.enabled ? `Speed limited to ${l.kbps} KB/s` : 'Speed limiter disabled (maximum speed)')
+          }, 'Could not set the speed limit')}
         />
       )}
       {dialog?.kind === 'checksum' && (

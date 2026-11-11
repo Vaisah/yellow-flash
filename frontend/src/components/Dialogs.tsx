@@ -24,7 +24,7 @@ import { backend, errorMessage } from '../api'
 import { explainError } from '../lib/errors'
 import { formatBytes } from '../lib/format'
 import { iconFor } from '../lib/categories'
-import type { AppInfo, Download, LinkInfo, Settings } from '../types'
+import type { AppInfo, Download, LinkInfo, Options, Settings, SiteLogin } from '../types'
 import logo from '../assets/yellow-flash-256.png'
 
 const CONNECTION_CHOICES = [1, 2, 4, 6, 8, 12, 16, 24, 32]
@@ -120,6 +120,7 @@ export function AddUrlDialog({
         filename: filenameEdited ? filename.trim() : '',
         connections,
         start,
+        ...(needAuth && username.trim() ? { username: username.trim(), password } : {}),
       })
       onAdded(d, start)
     } catch (e) {
@@ -292,17 +293,15 @@ export function SettingsDialog({ settings, info, onClose, onSaved }: SettingsPro
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
 
-  // Advanced options state (matching IDM / MDM)
-  const [launchOnStartup, setLaunchOnStartup] = useState(true)
-  const [browserIntegrate, setBrowserIntegrate] = useState(true)
-  const [showCompletePopup, setShowCompletePopup] = useState(true)
-  const [fileExtensions, setFileExtensions] = useState(
-    '3GP 7Z AAC ACE APK AVI BIN BZ2 DEB DMG DOC DOCX EXE GZ ISO JAR JPEG JPG MKV MOV MP3 MP4 MPG MSI PDF PKG PPT PPTX RAR RPM TAR TGZ TXT WAV WEBM WMA WMV XZ ZIP'
-  )
-  const [siteLogins, setSiteLogins] = useState([
-    { site: 'rapidgator.net', user: 'premium_user' },
-    { site: 'mega.nz', user: 'pro_account' },
-  ])
+  // Options → General and File Types, as the backend holds them.
+  const [options, setOptions] = useState<Options | null>(null)
+  const setOption = <K extends keyof Options>(key: K, value: Options[K]) =>
+    setOptions((o) => (o ? { ...o, [key]: value } : o))
+  const [siteLogins, setSiteLogins] = useState<SiteLogin[]>([])
+  useEffect(() => {
+    backend().GetOptions().then(setOptions).catch((e) => setError(errorMessage(e)))
+    backend().ListSiteLogins().then(setSiteLogins).catch((e) => setError(errorMessage(e)))
+  }, [])
   const [newSite, setNewSite] = useState('')
   const [newUser, setNewUser] = useState('')
   const [newPass, setNewPass] = useState('')
@@ -323,23 +322,36 @@ export function SettingsDialog({ settings, info, onClose, onSaved }: SettingsPro
     setSaving(true)
     setError('')
     try {
-      onSaved(await backend().SaveSettings(draft))
+      const saved = await backend().SaveSettings(draft)
+      if (options) await backend().SaveOptions(options)
+      onSaved(saved)
     } catch (e) {
       setError(errorMessage(e))
       setSaving(false)
     }
   }
 
-  const addLogin = () => {
+  // Saved at once: the password goes to the system's keychain.
+  const addLogin = async () => {
     if (!newSite.trim() || !newUser.trim()) return
-    setSiteLogins([...siteLogins, { site: newSite.trim(), user: newUser.trim() }])
-    setNewSite('')
-    setNewUser('')
-    setNewPass('')
+    setError('')
+    try {
+      setSiteLogins(await backend().SaveSiteLogin(newSite.trim(), newUser.trim(), newPass))
+      setNewSite('')
+      setNewUser('')
+      setNewPass('')
+    } catch (e) {
+      setError(errorMessage(e))
+    }
   }
 
-  const removeLogin = (index: number) => {
-    setSiteLogins(siteLogins.filter((_, i) => i !== index))
+  const removeLogin = async (site: string) => {
+    setError('')
+    try {
+      setSiteLogins(await backend().RemoveSiteLogin(site))
+    } catch (e) {
+      setError(errorMessage(e))
+    }
   }
 
   return (
@@ -411,8 +423,9 @@ export function SettingsDialog({ settings, info, onClose, onSaved }: SettingsPro
             <label className="toggle">
               <input
                 type="checkbox"
-                checked={launchOnStartup}
-                onChange={(e) => setLaunchOnStartup(e.target.checked)}
+                checked={options?.launchOnStartup ?? false}
+                disabled={!options}
+                onChange={(e) => setOption('launchOnStartup', e.target.checked)}
               />
               <span>Launch Yellow Flash on system startup</span>
             </label>
@@ -420,8 +433,9 @@ export function SettingsDialog({ settings, info, onClose, onSaved }: SettingsPro
             <label className="toggle">
               <input
                 type="checkbox"
-                checked={browserIntegrate}
-                onChange={(e) => setBrowserIntegrate(e.target.checked)}
+                checked={options?.browserCapture ?? false}
+                disabled={!options}
+                onChange={(e) => setOption('browserCapture', e.target.checked)}
               />
               <span>Capture downloads from web browsers (Chrome, Edge, Firefox, Brave, Opera)</span>
             </label>
@@ -447,8 +461,9 @@ export function SettingsDialog({ settings, info, onClose, onSaved }: SettingsPro
             <label className="toggle">
               <input
                 type="checkbox"
-                checked={showCompletePopup}
-                onChange={(e) => setShowCompletePopup(e.target.checked)}
+                checked={options?.showComplete ?? true}
+                disabled={!options}
+                onChange={(e) => setOption('showComplete', e.target.checked)}
               />
               <span>Show Download Complete notification window when finished</span>
             </label>
@@ -460,8 +475,9 @@ export function SettingsDialog({ settings, info, onClose, onSaved }: SettingsPro
             <label className="field">
               <span>Automatically capture downloads for following file extensions:</span>
               <textarea
-                value={fileExtensions}
-                onChange={(e) => setFileExtensions(e.target.value)}
+                value={options?.fileTypes ?? ''}
+                disabled={!options}
+                onChange={(e) => setOption('fileTypes', e.target.value)}
                 rows={5}
                 className="field-textarea field-mono"
                 spellCheck={false}
@@ -488,14 +504,8 @@ export function SettingsDialog({ settings, info, onClose, onSaved }: SettingsPro
             </label>
 
             <div className="category-folders-info">
-              <span>Category subfolders (created automatically):</span>
-              <ul className="category-folders-list">
-                <li><code>C:\Downloads\Music</code> for audio files</li>
-                <li><code>C:\Downloads\Videos</code> for video files</li>
-                <li><code>C:\Downloads\Compressed</code> for zip/rar archives</li>
-                <li><code>C:\Downloads\Programs</code> for installable software</li>
-                <li><code>C:\Downloads\Documents</code> for PDF and office files</li>
-              </ul>
+              <span>New downloads are saved here unless you choose another folder when adding them.
+                The sidebar's categories (Music, Videos, Compressed, Programs, Documents) sort the list by file type.</span>
             </div>
           </div>
         )}
@@ -534,7 +544,10 @@ export function SettingsDialog({ settings, info, onClose, onSaved }: SettingsPro
                   </tr>
                 </thead>
                 <tbody>
-                  {siteLogins.map((item, idx) => (
+                  {siteLogins.length === 0 && (
+                    <tr><td colSpan={3} className="queue-empty-td">No saved logins. Downloads from a site listed here use its login.</td></tr>
+                  )}
+                  {siteLogins.map((item) => (
                     <tr key={item.site}>
                       <td>{item.site}</td>
                       <td>{item.user}</td>
@@ -542,7 +555,7 @@ export function SettingsDialog({ settings, info, onClose, onSaved }: SettingsPro
                         <button
                           type="button"
                           className="icon-btn-sm queue-remove-btn"
-                          onClick={() => removeLogin(idx)}
+                          onClick={() => void removeLogin(item.site)}
                           title="Remove Login"
                         >
                           <Trash2 size={13} />
@@ -574,7 +587,7 @@ export function SettingsDialog({ settings, info, onClose, onSaved }: SettingsPro
                 onChange={(e) => setNewPass(e.target.value)}
                 className="field-sm"
               />
-              <button type="button" className="btn btn-sm" onClick={addLogin}>
+              <button type="button" className="btn btn-sm" onClick={() => void addLogin()}>
                 Add
               </button>
             </div>
@@ -587,7 +600,7 @@ export function SettingsDialog({ settings, info, onClose, onSaved }: SettingsPro
               <img src={logo} alt="Yellow Flash" width={64} height={64} />
               <div>
                 <strong>Yellow Flash Download Manager</strong>
-                <span>Version 10.36 (Build 2026.11)</span>
+                <span>Version {info?.version ?? '—'}</span>
                 <span>High-Speed Resumable Multi-Segment Engine</span>
                 {info?.dataDir && <span className="mono">Storage: {info.dataDir}</span>}
               </div>
