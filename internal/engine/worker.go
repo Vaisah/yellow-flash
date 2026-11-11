@@ -136,7 +136,11 @@ func (m *Manager) transferSegmented(ctx context.Context, e *entry, d *domain.Dow
 	mon := m.startMonitor(e, tr, checkpoint, func(err error) { cancelW(err) })
 	g, gctx := errgroup.WithContext(wctx)
 
-	workers := m.connectionsFor(meta.URL, min(d.Connections, m.cfg.MaxConnections))
+	want := min(d.Connections, m.cfg.MaxConnections)
+	if meta.MaxConnections > 0 {
+		want = min(want, meta.MaxConnections) // the service's cap
+	}
+	workers := m.connectionsFor(meta.URL, want)
 	var alive atomic.Int32
 	alive.Store(int32(workers))
 	firstPart := pl.next(0)
@@ -255,6 +259,9 @@ func (m *Manager) fetchPartOnce(ctx context.Context, e *entry, f *os.File, pl *p
 			req.Header.Set("If-Range", v)
 		}
 		if res, err = m.clientFor(e).Do(req); err != nil {
+			if meta.Through != "" {
+				err = hideLink(err, meta.URL)
+			}
 			return err
 		}
 		defer res.Body.Close()
@@ -524,6 +531,9 @@ func (m *Manager) fetchStream(ctx context.Context, e *entry, f *os.File, meta *d
 			}
 		}
 		if res, err = m.clientFor(e).Do(req); err != nil {
+			if meta.Through != "" {
+				err = hideLink(err, meta.URL)
+			}
 			return err
 		}
 		defer res.Body.Close()

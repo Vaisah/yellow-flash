@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -16,6 +17,7 @@ import (
 	"github.com/vaisah/internal/application/download"
 	"github.com/vaisah/internal/application/events"
 	"github.com/vaisah/internal/application/queues"
+	"github.com/vaisah/internal/crash"
 	domain "github.com/vaisah/internal/domain/download"
 	"github.com/vaisah/internal/domain/queue"
 	"github.com/vaisah/internal/engine"
@@ -23,6 +25,7 @@ import (
 	"github.com/vaisah/internal/infrastructure/persistence/jsonstore"
 	"github.com/vaisah/internal/ipc"
 	"github.com/vaisah/internal/platform"
+	"github.com/vaisah/internal/remote"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -52,6 +55,22 @@ type App struct {
 	media mediaJobs
 	// torrents holds the torrent session and list.
 	torrents torrentHost
+	// remote is the remote control (set at startup); speeds are the
+	// downloads' last speeds, for its list.
+	remote *remote.Remote
+	speeds speeds
+	// debrid holds the debrid accounts (the engine's unlockers) and the
+	// torrents sent to them.
+	debrid debridHost
+	// extracts extracts finished archives, one at a time.
+	extracts extractor
+	// lastCrash is the report made at this start of the last run's crash
+	// (main.go), until the window asks for it.
+	crashMu   sync.Mutex
+	lastCrash *crash.Report
+	// logger writes <data>/logs (crash reports take its last lines).
+	logger *slog.Logger
+	logs   *crash.Rolling
 
 	// Commands from the IPC channel wait here until the UI is ready.
 	commands chan ipc.Incoming
@@ -75,6 +94,10 @@ type AddRequest struct {
 	Filename    string `json:"filename"`
 	Connections int    `json:"connections"`
 	Start       bool   `json:"start"`
+	// Username and Password are the server's login ("": none, or the
+	// site's saved one). Kept only in memory, never in the list.
+	Username string `json:"username,omitempty"`
+	Password string `json:"password,omitempty"`
 }
 
 // AppInfo describes the running application.
@@ -115,9 +138,15 @@ func (a *App) Startup(ctx context.Context) {
 	publisher := events.PublisherFunc(func(e events.Event) {
 		runtime.EventsEmit(ctx, "downloads:updated", e.Download)
 		if e.Type == events.ProgressUpdated {
+			a.speeds.set(e.Progress.DownloadID, e.Progress.Speed)
 			runtime.EventsEmit(ctx, "downloads:progress", e.Progress)
-		} else if r := a.queues.Load(); r != nil {
-			r.Notify() // a download changed: its queue may start the next one
+		} else {
+			if r := a.queues.Load(); r != nil {
+				r.Notify() // a download changed: its queue may start the next one
+			}
+			if e.Download.Status == domain.Completed {
+				go a.downloadFinished(e.Download) // an archive may be extracted
+			}
 		}
 	})
 	// URLs typed by the user may legitimately point at LAN hosts (NAS,
@@ -128,8 +157,13 @@ func (a *App) Startup(ctx context.Context) {
 	if err != nil {
 		runtime.LogErrorf(ctx, "network settings: %v", err)
 	}
+	// File-host links go through the user's debrid accounts (debrid_app.go).
+	// The engine logs into <data>/logs, which crash reports read.
+	if a.logger == nil {
+		a.logger, a.logs = crash.NewLogger(a.dataDir)
+	}
 	manager, err := engine.New(a.store, engine.Config{AllowPrivateNetworks: true, Publisher: publisher,
-		HostLimits: a.store, DNS: dns, Network: netOpts})
+		HostLimits: a.store, DNS: dns, Network: netOpts, Unlockers: a.debridAccounts(), Logger: a.logger})
 	if err != nil {
 		runtime.LogErrorf(ctx, "start download engine: %v", err)
 		return
@@ -165,6 +199,8 @@ func (a *App) Startup(ctx context.Context) {
 	go cap.Run(qctx)
 	go a.registerBrowserHost(ctx)
 	go a.resumeTorrents()
+	go a.startDebrid()
+	a.startRemote()
 }
 
 // queueDone does what a finished queue's schedule asks.
@@ -188,11 +224,16 @@ func (a *App) queueDone(ctx context.Context, q queue.Queue) {
 
 // Shutdown pauses active downloads, persisting progress, then closes the DB.
 func (a *App) Shutdown(ctx context.Context) {
+	if a.remote != nil {
+		a.remote.Stop()
+	}
 	a.stopCommands()
 	if a.stopQueues != nil {
 		a.stopQueues()
 	}
 	a.stopTorrents()
+	a.stopDebrid() // before the downloads: its runs pause their files
+	a.stopExtracts()
 	canClose := true
 	if a.service != nil {
 		waitCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
@@ -206,6 +247,9 @@ func (a *App) Shutdown(ctx context.Context) {
 		if err := a.store.Close(); err != nil {
 			runtime.LogErrorf(ctx, "close database: %v", err)
 		}
+	}
+	if a.logs != nil {
+		_ = a.logs.Close()
 	}
 }
 
@@ -257,6 +301,16 @@ func (a *App) AddDownload(req AddRequest) (domain.Download, error) {
 		return domain.Download{}, err
 	}
 	create := domain.CreateRequest{URL: req.URL, Directory: req.Directory, Filename: req.Filename, Connections: req.Connections}
+	// The server's login: the one typed, else the site's saved one.
+	auth := ""
+	if strings.TrimSpace(req.Username) != "" {
+		auth = basicAuth(strings.TrimSpace(req.Username), req.Password)
+	} else {
+		auth = a.loginFor(req.URL)
+	}
+	if auth != "" {
+		create.Headers = map[string]string{"Authorization": auth}
+	}
 	var (
 		d   *domain.Download
 		err error

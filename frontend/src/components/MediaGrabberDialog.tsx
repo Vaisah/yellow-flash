@@ -1,48 +1,94 @@
-import { useState } from 'react'
-import { Check, CheckSquare, Download, Film, Globe, Loader2, Music, Video } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { AlertTriangle, Download, Film, Globe, Loader2, Music, Video } from 'lucide-react'
 import { Modal } from './Modal'
-
-interface StreamQuality {
-  id: string
-  label: string
-  resolution: string
-  format: string
-  sizeMb: number
-  hasAudio: boolean
-}
+import { backend, errorMessage } from '../api'
+import { formatBytes } from '../lib/format'
+import type { VideoLookUp } from '../types'
 
 interface Props {
   onClose: () => void
-  onAddStream: (url: string, quality: string, start: boolean) => void
+  /** A video download started (it runs with yt-dlp, outside the list). */
+  onStarted: (title: string, quality: string) => void
 }
 
-export function MediaGrabberDialog({ onClose, onAddStream }: Props) {
-  const [pageUrl, setPageUrl] = useState('https://www.youtube.com/watch?v=dQw4w9WgXcQ')
+function duration(s: number): string {
+  if (!s || s <= 0) return ''
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  const sec = Math.floor(s % 60)
+  return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`
+}
+
+const isAudio = (label: string, ext: string) => /audio|mp3|m4a|opus/i.test(label) || ['mp3', 'm4a', 'opus', 'ogg', 'wav'].includes(ext)
+
+export function MediaGrabberDialog({ onClose, onStarted }: Props) {
+  const [pageUrl, setPageUrl] = useState('')
   const [isInspecting, setIsInspecting] = useState(false)
-  const [hasInspected, setHasInspected] = useState(true)
-  const [selectedQuality, setSelectedQuality] = useState('1080p')
+  const [found, setFound] = useState<VideoLookUp | null>(null)
+  const [selected, setSelected] = useState(0)
+  const [error, setError] = useState('')
+  const [hasYtDlp, setHasYtDlp] = useState<boolean | null>(null)
+  const [installing, setInstalling] = useState(false)
+  const [starting, setStarting] = useState(false)
 
-  const STREAMS: StreamQuality[] = [
-    { id: '4k', label: 'Ultra HD 4K (2160p)', resolution: '3840x2160', format: 'MP4 / H.264', sizeMb: 245.5, hasAudio: true },
-    { id: '1080p', label: 'Full HD (1080p)', resolution: '1920x1080', format: 'MP4 / H.264', sizeMb: 85.2, hasAudio: true },
-    { id: '720p', label: 'High Definition (720p)', resolution: '1280x720', format: 'MP4 / H.264', sizeMb: 42.1, hasAudio: true },
-    { id: '480p', label: 'Standard Definition (480p)', resolution: '854x480', format: 'MP4 / H.264', sizeMb: 21.0, hasAudio: true },
-    { id: 'audio', label: 'Audio Only (MP3 / 320kbps)', resolution: 'Audio only', format: 'MP3 High Quality', sizeMb: 7.8, hasAudio: true },
-  ]
+  useEffect(() => {
+    backend().GetHelpers()
+      .then((hs) => setHasYtDlp(hs.some((h) => h.name === 'yt-dlp' && h.exe !== '')))
+      .catch(() => setHasYtDlp(false))
+  }, [])
 
-  const handleInspect = () => {
+  const choices = found?.choices ?? []
+
+  const install = async () => {
+    setInstalling(true)
+    setError('')
+    try {
+      const h = await backend().InstallHelper('yt-dlp')
+      setHasYtDlp(h.exe !== '')
+    } catch (e) {
+      setError(`Could not install yt-dlp: ${errorMessage(e)}`)
+    } finally {
+      setInstalling(false)
+    }
+  }
+
+  const handleInspect = async () => {
     if (!pageUrl.trim()) return
     setIsInspecting(true)
-    setTimeout(() => {
+    setError('')
+    setFound(null)
+    try {
+      const v = await backend().LookUpVideo(pageUrl.trim(), navigator.language || 'en')
+      setFound(v)
+      setSelected(0)
+      if (v.list) setError(`This page lists ${v.list.total > 0 ? v.list.total : 'several'} videos; open one video's own page to download it.`)
+      else if (!v.choices?.length) setError('No downloadable format was found on this page.')
+    } catch (e) {
+      setError(errorMessage(e))
+    } finally {
       setIsInspecting(false)
-      setHasInspected(true)
-    }, 600)
+    }
   }
 
-  const handleDownload = (start: boolean) => {
-    onAddStream(pageUrl, selectedQuality, start)
-    onClose()
+  const handleDownload = async () => {
+    const choice = choices[selected]
+    if (!found || !choice) return
+    setStarting(true)
+    setError('')
+    try {
+      await backend().StartVideoDownload({
+        url: pageUrl.trim(), title: found.title, choice, directory: '',
+        subs: { langs: [], automatic: false, embed: false },
+      })
+      onStarted(found.title, choice.label)
+      onClose()
+    } catch (e) {
+      setError(errorMessage(e))
+      setStarting(false)
+    }
   }
+
+  const ready = !!found && choices.length > 0 && !found.list
 
   return (
     <Modal
@@ -52,80 +98,85 @@ export function MediaGrabberDialog({ onClose, onAddStream }: Props) {
       width={640}
       footer={
         <>
-          <button
-            type="button"
-            className="btn"
-            onClick={() => handleDownload(false)}
-            disabled={!hasInspected}
-          >
-            Download Later
+          {error && <span className="foot-error" role="alert">{error}</span>}
+          <button type="button" className="btn" onClick={onClose}>
+            Cancel
           </button>
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={() => handleDownload(true)}
-            disabled={!hasInspected}
-          >
-            Start Download
+          <button type="button" className="btn btn-primary" onClick={() => void handleDownload()} disabled={!ready || starting}>
+            {starting ? <Loader2 size={14} className="spin" /> : <Download size={14} />} Start Download
           </button>
         </>
       }
     >
       <div className="media-grabber-content">
+        {hasYtDlp === false && (
+          <div className="link-problem">
+            <AlertTriangle size={18} />
+            <div>
+              <strong>Videos are downloaded with yt-dlp</strong>
+              <p>It isn't installed yet. Yellow Flash can install its own copy (checked against its publisher's signature).</p>
+              <button type="button" className="btn btn-sm" onClick={() => void install()} disabled={installing}>
+                {installing ? <Loader2 size={14} className="spin" /> : <Download size={14} />} Install yt-dlp
+              </button>
+            </div>
+          </div>
+        )}
+
         <label className="field">
           <span>Video or Web Page Address</span>
           <div className="input-with-button">
             <input
+              data-autofocus
               value={pageUrl}
               onChange={(e) => setPageUrl(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') void handleInspect() }}
               placeholder="https://youtube.com/watch?v=... or https://vimeo.com/..."
               spellCheck={false}
             />
             <button
               type="button"
               className="btn btn-primary"
-              onClick={handleInspect}
-              disabled={isInspecting}
+              onClick={() => void handleInspect()}
+              disabled={isInspecting || !hasYtDlp || !pageUrl.trim()}
             >
               {isInspecting ? <Loader2 size={14} className="spin" /> : <Globe size={14} />} Inspect Streams
             </button>
           </div>
         </label>
 
-        {hasInspected && (
+        {found && !found.list && (
           <div className="media-streams-section">
             <div className="media-preview-card">
               <div className="media-thumb-placeholder">
                 <Film size={28} className="media-thumb-icon" />
               </div>
               <div className="media-meta">
-                <strong>Rick Astley - Never Gonna Give You Up (Official Music Video)</strong>
-                <span>Source: YouTube · Duration: 3:33 min · Channel: RickAstleyVEVO</span>
+                <strong>{found.title}</strong>
+                <span>
+                  {duration(found.duration) && `Duration: ${duration(found.duration)} min`}
+                  {found.needsFfmpeg && ' · Install ffmpeg for the best qualities (video and audio come apart)'}
+                </span>
               </div>
             </div>
 
-            <span className="streams-header">Available Formats & Qualities:</span>
+            {choices.length > 0 && <span className="streams-header">Available Formats & Qualities:</span>}
 
             <div className="streams-list">
-              {STREAMS.map((s) => {
-                const isSelected = selectedQuality === s.id
+              {choices.map((s, i) => {
+                const isSelected = selected === i
                 return (
-                  <div
-                    key={s.id}
-                    className={`stream-item ${isSelected ? 'selected' : ''}`}
-                    onClick={() => setSelectedQuality(s.id)}
-                  >
+                  <div key={s.selector + s.label} className={`stream-item ${isSelected ? 'selected' : ''}`} onClick={() => setSelected(i)}>
                     <div className="stream-radio">
                       <div className={`radio-circle ${isSelected ? 'checked' : ''}`} />
                     </div>
                     <div className="stream-icon-col">
-                      {s.id === 'audio' ? <Music size={16} /> : <Video size={16} />}
+                      {isAudio(s.label, s.ext) ? <Music size={16} /> : <Video size={16} />}
                     </div>
                     <div className="stream-info-col">
                       <span className="stream-title">{s.label}</span>
-                      <span className="stream-sub">{s.resolution} · {s.format}</span>
+                      <span className="stream-sub">{s.ext.toUpperCase()}</span>
                     </div>
-                    <span className="stream-size">~{s.sizeMb.toFixed(1)} MB</span>
+                    <span className="stream-size">{s.size > 0 ? `~${formatBytes(s.size)}` : ''}</span>
                   </div>
                 )
               })}
@@ -136,4 +187,3 @@ export function MediaGrabberDialog({ onClose, onAddStream }: Props) {
     </Modal>
   )
 }
-

@@ -27,6 +27,11 @@ and the parts that read MDM's Rust sources read the Go ports instead. Each JavaS
 with a header saying so. The extension's icons are made from Yellow Flash's own app icon
 (`build/appicon.png`), not Mister Download Manager's.
 
+The remote control's page (`internal/remote/web/`: `index.html`, `app.js`, `app.css`,
+`manifest.webmanifest`) is Mister Download Manager's, modified for Yellow Flash: its name and the
+key its token is kept under are changed. Each file starts with a header saying so. Its icon
+(`icon.png`) is Yellow Flash's own app icon, scaled down.
+
 ## Go dependencies added for the port
 
 | Module | Licence | Used for | Since |
@@ -44,6 +49,9 @@ with a header saying so. The extension's icons are made from Yellow Flash's own 
 | Required by anacrolix/torrent, Apache-2.0 | Apache-2.0 | `anacrolix/btree`, `go-logr/logr`, `go-logr/stdr`, `google/btree`, `go.opentelemetry.io/auto/sdk`; `RoaringBitmap/roaring` and `go.opentelemetry.io/otel` (otel, metric, trace) are Apache-2.0 with parts under BSD-3-Clause | port step 5b (`torrent`) |
 | Required by anacrolix/torrent, BSD | BSD-3-Clause, BSD-2-Clause | BSD-3-Clause: `bahlo/generic-list-go`, `bradfitz/iter`, `edsrzf/mmap-go`, `google/go-cmp`, `google/uuid`, `spaolacci/murmur3`, `wlynxg/anet`, `golang.org/x/crypto`, `x/exp`, `x/sync`, `x/text`; BSD-2-Clause: `gorilla/websocket`, `pkg/errors` | port step 5b (`torrent`) |
 | Required by anacrolix/torrent, ISC | ISC | `davecgh/go-spew` | port step 5b (`torrent`) |
+| `rsc.io/qr` v0.2.0 | BSD-3-Clause | The remote control's pairing QR code, drawn in a terminal (`api_app.go`, `yellowflash-cli pair`) | port step 7a (automation API) |
+| `github.com/ulikunitz/xz` v0.5.12 | BSD-3-Clause | The xz decoder for `.xz` and `.tar.xz` archives (`internal/extract/formats.go`), in place of MDM's lzma-rust2 | port step 8f (archives) |
+| `github.com/godbus/dbus/v5` v5.1.0 | BSD-2-Clause | The Linux keychain: the freedesktop Secret Service over D-Bus (`internal/platform/keychain_linux.go`), where debrid sign-ins are kept; it was already an indirect dependency via Wails | port step 8d (keychain) |
 
 ## Third-party data and assets
 
@@ -57,6 +65,14 @@ with a header saying so. The extension's icons are made from Yellow Flash's own 
   Mister Download Manager's release key with one of its signed lists (used only to test the
   Ed25519 signature check; Yellow Flash never trusts that key), from Mister Download Manager's
   `crates/tools/tests/fixtures` and `crates/tools/keys`.
+- `internal/geo/data/ipcountry.bin.xz`: IP to country, from DB-IP's IP to Country Lite database
+  (https://db-ip.com, dbip-country-lite-2026-11), under the Creative Commons Attribution 4.0
+  International License (https://creativecommons.org/licenses/by/4.0/). **IP Geolocation by
+  DB-IP.** Built into a range table by Mister Download Manager's `tools/geo/build.py`
+  (`internal/geo/data/SOURCE.txt`); the app shows this credit wherever it shows a country.
+- `internal/geo/data/flags.png`: the countries' flags, from lipis/flag-icons, © 2013 Panayiotis
+  Lipiridis, MIT (`internal/geo/data/LICENSE-flag-icons`), drawn into one picture by Mister
+  Download Manager's `crates/geo/examples/flag_atlas.rs`.
 
 Assets ported from Mister Download Manager keep their own licences, as listed in its
 `ATTRIBUTION.md`. When one of them is added to this repository, list it here with its author,

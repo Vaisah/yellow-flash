@@ -24,11 +24,11 @@ func volumeOf(dir string) (Volume, bool) {
 	if err != nil {
 		return Volume{}, false
 	}
-	var free uint64
-	if windows.GetDiskFreeSpaceEx(p, &free, nil, nil) != nil {
+	var free, total uint64
+	if windows.GetDiskFreeSpaceEx(p, &free, &total, nil) != nil {
 		return Volume{}, false
 	}
-	return Volume{Free: free, FileSystem: fileSystem(dir)}, true
+	return Volume{Free: free, Total: total, FileSystem: fileSystem(dir)}, true
 }
 
 // fileSystem names the file system the folder really is on (through

@@ -84,7 +84,7 @@ func driveProber(t *testing.T) (*Prober, *fakeDrive, string) {
 	srv := httptest.NewServer(fd)
 	t.Cleanup(srv.Close)
 	client := NewClient(Options{AllowPrivate: true})
-	client.Transport.(*http.Transport).DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
+	client.Transport.(seenTripper).base.(*http.Transport).DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, network, srv.Listener.Addr().String())
 	}
 	_, port, _ := net.SplitHostPort(srv.Listener.Addr().String())

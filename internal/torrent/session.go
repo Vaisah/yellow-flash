@@ -21,6 +21,7 @@ import (
 	"io"
 	"math"
 	"net"
+	"net/http"
 	"net/netip"
 	"net/url"
 	"os"
@@ -31,9 +32,11 @@ import (
 	"time"
 
 	bt "github.com/anacrolix/torrent"
+	"github.com/anacrolix/torrent/dialer"
 	"github.com/anacrolix/torrent/iplist"
 	"github.com/anacrolix/torrent/metainfo"
 	"github.com/anacrolix/torrent/storage"
+	xproxy "golang.org/x/net/proxy"
 	"golang.org/x/time/rate"
 
 	"github.com/vaisah/internal/ipc"
@@ -46,9 +49,12 @@ var (
 	ErrMetadataTimeout = errors.New("no peer sent the torrent's file list in time")
 	// ErrUnknown: the torrent is not in the session.
 	ErrUnknown = errors.New("this torrent is not in the list")
-	// ErrProxy: torrents can't go through a proxy here (peers would be
-	// reached directly, showing this computer's address).
-	ErrProxy = errors.New("torrents can't go through a proxy: peers would be reached directly")
+	// ErrNoProxy: torrents run only through a SOCKS5 proxy, so peers never
+	// see this computer's address.
+	ErrNoProxy = errors.New("torrents need a SOCKS5 proxy (set one in the connection settings), so peers don't see this computer's address")
+	// ErrProxyKind: the proxy can't carry peer connections (only SOCKS5
+	// can).
+	ErrProxyKind = errors.New("torrents need a SOCKS5 proxy: an HTTP proxy can't carry connections to peers")
 )
 
 // MaxTorrentFile is the most a .torrent file may be: the largest real ones
@@ -240,30 +246,51 @@ type Peer struct {
 	Kind     string `json:"kind"`
 }
 
-// Config is how the session runs (each of these is the person's to choose).
+// Config is how the session runs.
+//
+// Peers never see this computer's address: every connection to a peer and
+// to a tracker goes through Proxy (SOCKS5), and nothing that would be
+// reached directly runs: no listening for peers, no UPnP, no DHT and no
+// UDP trackers (UDP can't go through the proxy), no web seeds or
+// WebTorrent. Without a proxy torrents are refused (ErrNoProxy).
 type Config struct {
 	// StateDir keeps the pieces already checked, and magnet look-ups.
 	StateDir string
-	// Listen accepts connections from peers (better speed); Port is the
-	// one to listen on (0: picked at each start).
-	Listen bool
-	Port   int
-	// UPnP asks the router to forward the listening port.
-	UPnP bool
-	// DHT finds peers without trackers.
-	DHT bool
-	// Proxy is the app's fixed proxy, if any: torrents are refused then
-	// (ErrProxy), as peers can't go through it here.
+	// Proxy is a socks5:// or socks5h:// address (credentials may be in
+	// it; they are never shown in errors).
 	Proxy string
-	// Blocklist: peers in it are refused.
+	// Blocklist: peers in it are never dialled.
 	Blocklist *Blocklist
-	// Offline is for tests: no DHT, no port forwarding, loopback only.
+	// Offline is for tests: peers on this computer are allowed, and with
+	// no Proxy the session connects directly and listens on loopback.
 	Offline bool
 }
 
-// NewConfig is everything on, as BitTorrent clients usually are.
-func NewConfig(stateDir string) Config {
-	return Config{StateDir: stateDir, Listen: true, UPnP: true, DHT: true}
+// NewConfig is a session through proxy.
+func NewConfig(stateDir, proxy string) Config {
+	return Config{StateDir: stateDir, Proxy: proxy}
+}
+
+// proxyDialer is the SOCKS5 dialer for proxy.
+func proxyDialer(raw string) (*url.URL, xproxy.ContextDialer, error) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" {
+		return nil, nil, ErrProxyKind
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "socks5", "socks5h":
+	default:
+		return nil, nil, ErrProxyKind
+	}
+	d, err := xproxy.FromURL(u, xproxy.Direct)
+	if err != nil {
+		return nil, nil, ErrProxyKind
+	}
+	cd, ok := d.(xproxy.ContextDialer)
+	if !ok {
+		return nil, nil, ErrProxyKind
+	}
+	return u, cd, nil
 }
 
 // MinRate is the lowest limit a session can have, bytes/s: a whole 16 KiB
@@ -291,6 +318,7 @@ type Torrents struct {
 	pc       storage.PieceCompletion
 	down, up *rate.Limiter
 	offline  bool
+	proxied  bool
 	mu       sync.Mutex
 	items    map[string]*item
 }
@@ -304,10 +332,24 @@ func ipRanges(b *Blocklist) []iplist.Range {
 	return out
 }
 
+// errNoUDP refuses UDP trackers (they are dropped from every torrent when
+// proxied; this is in case one is left).
+var errNoUDP = errors.New("UDP can't go through the proxy")
+
 // Start starts the session.
 func Start(cfg Config) (*Torrents, error) {
-	if strings.TrimSpace(cfg.Proxy) != "" {
-		return nil, ErrProxy
+	var (
+		proxyURL *url.URL
+		dial     xproxy.ContextDialer
+	)
+	switch {
+	case strings.TrimSpace(cfg.Proxy) != "":
+		var err error
+		if proxyURL, dial, err = proxyDialer(cfg.Proxy); err != nil {
+			return nil, err
+		}
+	case !cfg.Offline:
+		return nil, ErrNoProxy
 	}
 	if err := os.MkdirAll(cfg.StateDir, 0o700); err != nil {
 		return nil, err
@@ -316,17 +358,15 @@ func Start(cfg Config) (*Torrents, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Torrents{pc: pc, items: map[string]*item{}, offline: cfg.Offline,
+	s := &Torrents{pc: pc, items: map[string]*item{}, offline: cfg.Offline, proxied: dial != nil,
 		down: rate.NewLimiter(rate.Inf, 1<<20), up: rate.NewLimiter(rate.Inf, 1<<20)}
 	lookups := filepath.Join(cfg.StateDir, "lookups")
 	c := bt.NewDefaultClientConfig()
 	c.DataDir = lookups
 	c.DefaultStorage = s.storageFor(lookups)
 	c.Seed = true
-	c.ListenPort = cfg.Port
-	c.AcceptPeerConnections = cfg.Listen
-	c.NoDHT = !cfg.DHT || cfg.Offline
-	c.NoDefaultPortForwarding = !cfg.UPnP || cfg.Offline
+	c.NoDHT = true
+	c.NoDefaultPortForwarding = true
 	// Web seeds are web addresses the torrent names; WebTorrent goes to
 	// signalling servers. Neither is wanted.
 	c.DisableWebseeds = true
@@ -336,7 +376,16 @@ func Start(cfg Config) (*Torrents, error) {
 	if cfg.Blocklist != nil && len(cfg.Blocklist.Ranges) > 0 {
 		c.IPBlocklist = iplist.New(ipRanges(cfg.Blocklist))
 	}
-	if cfg.Offline {
+	if s.proxied {
+		// Nothing of its own reaches the network: no sockets (so no address
+		// to tell peers or trackers either), peers dialled through the
+		// proxy, HTTP trackers fetched through it.
+		c.DisableTCP, c.DisableUTP = true, true
+		c.AcceptPeerConnections = false
+		c.HTTPProxy = http.ProxyURL(proxyURL)
+		c.TrackerListenPacket = func(string, string) (net.PacketConn, error) { return nil, errNoUDP }
+	} else {
+		// Offline (tests): direct, on loopback only.
 		c.ListenHost = func(string) string { return "127.0.0.1" }
 		c.DisableIPv6 = true
 	}
@@ -345,12 +394,15 @@ func Start(cfg Config) (*Torrents, error) {
 	// "access denied", which anacrolix doesn't try again: another pick
 	// does.
 	cl, err := bt.NewClient(c)
-	for try := 0; err != nil && cfg.Port == 0 && strings.Contains(err.Error(), "subsequent listen") && try < 20; try++ {
+	for try := 0; err != nil && strings.Contains(err.Error(), "subsequent listen") && try < 20; try++ {
 		cl, err = bt.NewClient(c)
 	}
 	if err != nil {
 		_ = pc.Close()
 		return nil, err
+	}
+	if s.proxied {
+		cl.AddDialer(dialer.WithNetwork{Network: "tcp", Dialer: dial})
 	}
 	s.cl = cl
 	return s, nil
@@ -391,7 +443,7 @@ func (s *Torrents) Metadata(ctx context.Context, magnet string) (Meta, error) {
 	if !IsMagnet(magnet) {
 		return Meta{}, ErrNotATorrent
 	}
-	filtered := FilterMagnet(strings.TrimSpace(magnet), false)
+	filtered := FilterMagnet(strings.TrimSpace(magnet), s.proxied)
 	spec, err := bt.TorrentSpecFromMagnetUri(filtered)
 	if err != nil {
 		return Meta{}, ErrNotATorrent
@@ -440,7 +492,7 @@ func (s *Torrents) Add(torrent []byte, dir string, chosen []int, paused bool) (s
 	if err != nil {
 		return "", err
 	}
-	if filtered, ok := FilterTorrent(torrent, false); ok {
+	if filtered, ok := FilterTorrent(torrent, s.proxied); ok {
 		torrent = filtered
 	}
 	it := &item{meta: meta, torrent: torrent, dir: dir}
@@ -707,7 +759,8 @@ func (s *Torrents) SetUploadLimit(bps int64) {
 	s.up.SetBurst(b)
 }
 
-// ListenPort is the port peers reach this computer on (0: none).
+// ListenPort is the port the session listens on: always 0 through a proxy
+// (nothing listens); offline, the tests' loopback port.
 func (s *Torrents) ListenPort() int {
 	for _, a := range s.cl.ListenAddrs() {
 		if t, ok := a.(*net.TCPAddr); ok {

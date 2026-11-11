@@ -214,7 +214,62 @@ export function installMockBackend() {
     }
   }
 
+  // The rest of the backend, simulated plainly for browser previews.
+  let speed = { enabled: false, kbps: 2048 }
+  let logins: { site: string; user: string }[] = []
+  let options = { launchOnStartup: false, showComplete: true, browserCapture: true, fileTypes: 'ZIP RAR 7Z ISO EXE MSI MP4 MKV MP3 PDF' }
+  let network = { speedLimitKBps: 0, dataCapEnabled: false, dataCapMB: 10000, dataCapHours: 24 }
+  const queues = [
+    { id: 'main', name: 'Main Download Queue', filesAtOnce: 4, items: [] as string[], schedule: { days: [true, true, true, true, true, true, true] }, createdAt: '', running: false, builtin: true },
+    { id: 'sync', name: 'Synchronization Queue', filesAtOnce: 1, items: [] as string[], sync: true, schedule: { days: [true, true, true, true, true, true, true] }, createdAt: '', running: false, builtin: true },
+  ]
+  const queueOf = (id: string) => queues.find((q) => q.id === id) ?? Promise.reject('no such queue')
+  const extras: Omit<AppBindings, 'Info' | 'ListDownloads' | 'GetDownload' | 'InspectLink' | 'AddDownload' | 'ResumeDownload' |
+    'PauseDownload' | 'CancelDownload' | 'RetryDownload' | 'DeleteDownload' | 'PauseAll' | 'ResumeAll' | 'GetSegments' | 'OpenFile' |
+    'ShowInFolder' | 'OpenFolder' | 'SelectDirectory' | 'ClipboardURL' | 'GetSettings' | 'SaveSettings'> = {
+    ListQueues: () => later(queues.map((q) => ({ ...q, items: [...q.items] }))),
+    CreateQueue: (name) => { const q = { ...queues[0], id: `q${Date.now()}`, name, items: [], builtin: false, running: false }; queues.push(q); return later(q) },
+    DeleteQueue: async (id) => { const i = queues.findIndex((q) => q.id === id); if (i > 1) queues.splice(i, 1) },
+    AddToQueue: async (qid, ids) => { const q = await queueOf(qid); q.items.push(...ids) },
+    RemoveFromQueue: async (id) => { for (const q of queues) q.items = q.items.filter((x) => x !== id) },
+    MoveInQueue: async (id, delta) => {
+      for (const q of queues) {
+        const i = q.items.indexOf(id)
+        const j = i + delta
+        if (i >= 0 && j >= 0 && j < q.items.length) [q.items[i], q.items[j]] = [q.items[j], q.items[i]]
+      }
+    },
+    StartQueue: async (id) => { (await queueOf(id)).running = true },
+    StopQueue: async (id) => { (await queueOf(id)).running = false },
+    SetQueueFilesAtOnce: async (id, n) => { (await queueOf(id)).filesAtOnce = n },
+    SetQueueSchedule: async (id, sch) => { (await queueOf(id)).schedule = sch as typeof queues[0]['schedule'] },
+    GetNetworkSettings: () => later({ ...network }),
+    SaveNetworkSettings: (n) => { network = { ...network, ...n }; return later({ ...network }) },
+    FileChecksum: () => later('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', 400),
+    DiskSpace: (dir) => later({ dir, free: 120 * 1024 * MB, total: 512 * 1024 * MB, usedPercent: 77 }),
+    CleanDisk: () => later({ files: 0, bytes: 0 }),
+    GetSpeedLimit: () => later({ ...speed }),
+    SetSpeedLimit: (l) => { speed = { ...l }; return later({ ...speed }) },
+    ListSiteLogins: () => later([...logins]),
+    SaveSiteLogin: (site, user) => { logins = [...logins.filter((l) => l.site !== site), { site, user }]; return later([...logins]) },
+    RemoveSiteLogin: (site) => { logins = logins.filter((l) => l.site !== site); return later([...logins]) },
+    GetOptions: () => later({ ...options }),
+    SaveOptions: (o) => { options = { ...o }; return later({ ...options }) },
+    ServerLocation: () => later({ place: 'unknown' as const, attribution: 'IP Geolocation by DB-IP', attributionUrl: 'https://db-ip.com' }),
+    FlagsPicture: () => later(''),
+    ExtractDownload: async () => undefined,
+    GetHelpers: () => later([{ name: 'yt-dlp', version: '', exe: '', chosen: false }]),
+    InstallHelper: () => later({ name: 'yt-dlp', version: 'preview', exe: 'yt-dlp', chosen: false }, 800),
+    LookUpVideo: () => later({ title: 'A video (browser preview)', duration: 213, needsFfmpeg: false, subs: [],
+      choices: [{ label: 'Best (1080p)', selector: 'b', ext: 'mp4', size: 85 * MB }, { label: 'Audio only (MP3)', selector: 'mp3', ext: 'mp3', size: 8 * MB }] }, 600),
+    StartVideoDownload: (req) => later({ id: `m${Date.now()}`, kind: 'video' as const, title: req.title, url: req.url,
+      progress: { state: 'running' as const, downloaded: 0, total: 0, speed: 0 } }),
+    ListMediaDownloads: () => later([]),
+    StopMediaDownload: async () => undefined,
+  }
+
   const app: AppBindings = {
+    ...extras,
     Info: () => later({ name: 'Yellow Flash', version: '10.36', dataDir: 'C:\\Downloads' }),
     ListDownloads: () => later(items.map((d) => ({ ...d }))),
     GetDownload: async (id) => ({ ...find(id) }),

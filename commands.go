@@ -72,9 +72,10 @@ func (a *App) stopCommands() {
 // dispatch runs one command.
 func (a *App) dispatch(ctx context.Context, in ipc.Incoming) {
 	cmd := in.Cmd
+	// A question or action (the automation API, or a paired device's):
+	// answered with one line (api_app.go).
 	if in.Reply != nil {
-		// The automation API (queries and actions) is not offered yet.
-		in.Reply <- ipc.Line(ipc.ErrorAnswer{Error: "the automation API is off", Code: ipc.APIOff})
+		a.answer(ctx, in)
 		return
 	}
 	switch {

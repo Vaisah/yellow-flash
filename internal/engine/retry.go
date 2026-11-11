@@ -30,6 +30,8 @@ const (
 	KindNetwork         ErrorKind = "network"
 	KindHTTP            ErrorKind = "http"
 	KindPermanent       ErrorKind = "permanent"
+	// KindService is a service account's refusal (ServiceError).
+	KindService ErrorKind = "service"
 )
 
 // Classification is the outcome of Classify.
@@ -63,6 +65,13 @@ func Classify(err error) Classification {
 	}
 	if errors.Is(err, context.Canceled) {
 		return Classification{Kind: KindCanceled}
+	}
+	// A service's refusal: retried after its wait when waiting may help
+	// (and that wait is within the policy's MaxRetryAfter).
+	var sv *ServiceError
+	if errors.As(err, &sv) {
+		w := sv.RetryWait()
+		return Classification{Kind: KindService, Retryable: w > 0, RetryAfter: w}
 	}
 	var se *network.StatusError
 	if errors.As(err, &se) {

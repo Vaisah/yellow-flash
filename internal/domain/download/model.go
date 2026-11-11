@@ -39,7 +39,10 @@ type Download struct {
 	// Restricted: the address came from a web page (the browser), so it may
 	// not reach loopback, private or link-local addresses, through redirects
 	// and resumes too.
-	Restricted  bool              `json:"restricted,omitempty"`
+	Restricted bool `json:"restricted,omitempty"`
+	// Server is where its answers came from (its last run's), kept to show
+	// after it ends; nil until known.
+	Server      *ServerInfo       `json:"server,omitempty"`
 	Headers     map[string]string `json:"-"`
 	CreatedAt   time.Time         `json:"createdAt"`
 	StartedAt   time.Time         `json:"startedAt"`
@@ -47,9 +50,26 @@ type Download struct {
 	UpdatedAt   time.Time         `json:"updatedAt"`
 }
 
+// ServerInfo is what a download learnt of its server.
+type ServerInfo struct {
+	// IP is the address that answered: the server's, or the proxy's when
+	// Proxied.
+	IP string `json:"ip,omitempty"`
+	// RTTMillis is the round trip to it, from its quickest connection.
+	RTTMillis int64 `json:"rttMs,omitempty"`
+	Proxied   bool  `json:"proxied,omitempty"`
+	// CDN is the CDN the answers named ("Cloudflare"): IP is one of its
+	// servers near this computer, not the site owner's.
+	CDN string `json:"cdn,omitempty"`
+}
+
 // Clone returns a deep copy that shares no mutable state.
 func (d *Download) Clone() *Download {
 	c := *d
+	if d.Server != nil {
+		s := *d.Server
+		c.Server = &s
+	}
 	if d.Headers != nil {
 		c.Headers = make(map[string]string, len(d.Headers))
 		for k, v := range d.Headers {
@@ -129,6 +149,11 @@ type RemoteMetadata struct {
 	RangeSupported bool   `json:"rangeSupported"`
 	// Checksum is the strongest whole-file hash the server announced.
 	Checksum Checksum `json:"checksum"`
+	// Through names the service account the file came through (a debrid
+	// service); URL is then its direct link, which is never stored.
+	Through string `json:"-"`
+	// MaxConnections is the most connections the source allows (0: no cap).
+	MaxConnections int `json:"-"`
 }
 
 // LinkInfo previews what a link points to, before a download is created.
