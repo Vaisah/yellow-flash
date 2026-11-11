@@ -1,5 +1,5 @@
 import type {
-  AddRequest, AppInfo, CleanResult, DiskInfo, Download, HelperInfo, LinkInfo, MediaRow, NetworkSettings, Options, Queue,
+  AddRequest, AppInfo, BrowserSetup, CleanResult, DiskInfo, Download, HelperInfo, LinkInfo, MediaRow, NetworkSettings, Options, Queue,
   Schedule, Segment, ServerLocation, Settings, SiteLogin, SpeedLimit, VideoChoice, VideoLookUp,
 } from './types'
 
@@ -51,6 +51,10 @@ export interface AppBindings {
   RemoveSiteLogin(site: string): Promise<SiteLogin[]>
   GetOptions(): Promise<Options>
   SaveOptions(o: Options): Promise<Options>
+  GetBrowserSetup(): Promise<BrowserSetup>
+  /** Opens the browser where the extension is added: "store" or "unpacked" (folder copied to the clipboard). */
+  AddExtensionTo(name: string): Promise<'store' | 'unpacked'>
+  FinishBrowserSetup(): Promise<void>
   ServerLocation(id: string): Promise<ServerLocation>
   FlagsPicture(): Promise<string>
   ExtractDownload(id: string, password: string): Promise<void>

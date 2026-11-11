@@ -13,13 +13,23 @@ have a screen yet; see [What the window doesn't show yet](#what-the-window-doesn
 Releases are built by GitHub Actions when a release is published
 ([.github/workflows/release.yml](.github/workflows/release.yml)). Each one attaches:
 
-- `yellow-flash-<version>-windows-amd64.zip`
+- `yellow-flash-<version>-windows-amd64-setup.exe`: the Windows installer (recommended)
+- `yellow-flash-<version>-windows-amd64.zip`: the same files without installing
 - `yellow-flash-<version>-linux-amd64.tar.gz` (needs GTK 3 and WebKitGTK 4.1)
 - `SHA256SUMS`
 
-Each archive holds the app, the browser host (`yellowflash-nmhost`), `yellowflash-cli` and
-`yellowflash-mcp`. Keep them in the same folder: the app finds the browser host beside itself.
-There is no installer or code signing yet, so Windows SmartScreen warns on first run.
+**The installer** needs no administrator rights: it installs for your user into
+`%LOCALAPPDATA%\Programs\Yellow Flash` and brings everything the app uses: the app, the browser
+helper (`yellowflash-nmhost`), `yellowflash-cli`, `yellowflash-mcp` and the browser extension. It
+connects the helper to every installed browser, adds Start menu and desktop shortcuts, and its
+last page starts Yellow Flash, which then offers to add the extension to each browser (see
+[Browser integration](#browser-integration)). Updating closes a running Yellow Flash first.
+Uninstalling removes all of it but keeps your download list and settings
+(`%APPDATA%\Yellow Flash`). The installer isn't code-signed yet, so Windows SmartScreen warns
+before it runs.
+
+The zip and the tarball hold the same files; keep them together, since the app finds the browser
+helper and the extension beside itself.
 
 ## Building from source
 
@@ -132,10 +142,25 @@ The backend for these is done and tested; their screens are still to build:
 ## Browser integration
 
 The extension in [extension/](extension/) (Chrome, Edge, Brave, Opera, Firefox) hands downloads
-to Yellow Flash through the native messaging host `yellowflash-nmhost`. Turning on browser capture
-in Options registers the host for the installed browsers; a portable copy doesn't register
-itself. [docs/browser-help.md](docs/browser-help.md) explains each connection problem the
-extension can report.
+to Yellow Flash through the native messaging host `yellowflash-nmhost`. The installer and every
+start of the app register the host with the installed browsers; a portable copy doesn't.
+
+**Connect Your Browsers.** On first start, and from Options → General → Connect browsers…, the
+app lists the browsers installed and which already have the extension; a row turns green when
+its extension connects. Browsers don't let a program add an extension by itself, so each
+"Set up" opens the browser where the person confirms it:
+
+- **Today** the extension isn't in any store yet. Chromium browsers (Chrome, Edge, Brave and
+  the others) load it from the installed `browser-extension` folder: the app opens the browser's
+  extensions page and copies the folder's path; the person turns on Developer mode and chooses
+  Load unpacked. Firefox needs the add-on from addons.mozilla.org, so it shows "Coming soon".
+- **Once it is listed**, put the store IDs in `internal/browser/extension.go` (`StoreID`,
+  `OtherStoreIDs`, `FirefoxPage`). Then "Set up" opens the store page (one click on Add), and
+  registering the host also writes Chrome's and Edge's external-extension entries, so those
+  browsers offer the extension by themselves at their next start.
+
+[docs/browser-help.md](docs/browser-help.md) explains each connection problem the extension can
+report.
 
 ## Command line
 

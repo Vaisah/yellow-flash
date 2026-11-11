@@ -69,13 +69,21 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - name: Install Wails
         run: go install github.com/wailsapp/wails/v2/cmd/wails@${WAILS_VERSION}
+      # The installer is made with NSIS; Wails skips it (with only a warning)
+      # when makensis isn't on the PATH.
+      - name: Install NSIS
+        run: |
+          if ! command -v makensis >/dev/null; then
+            choco install nsis -y --no-progress
+            echo "C:\\Program Files (x86)\\NSIS" >> "$GITHUB_PATH"
+          fi
 
       - name: Test
         run: go test ./...
 
-      - name: Build the app
-        run: wails build -clean -trimpath -ldflags "-s -w"
-      # The app looks for the browser host beside its exe as yellowflash-nmhost.
+      # The helpers first: the installer packs them beside the app, and the
+      # app looks for the browser helper beside its exe as yellowflash-nmhost.
+      # (No -clean below: it would empty build/bin.)
       - name: Build the helpers
         env:
           CGO_ENABLED: '0'
@@ -83,13 +91,20 @@ jobs:
           go build -trimpath -ldflags "-s -w" -o build/bin/yellowflash-nmhost.exe ./cmd/nm-host
           go build -trimpath -ldflags "-s -w" -o build/bin/yellowflash-cli.exe ./cmd/yellowflash-cli
           go build -trimpath -ldflags "-s -w" -o build/bin/yellowflash-mcp.exe ./cmd/yellowflash-mcp
+      - name: Build the app and its installer
+        run: |
+          wails build -nsis -trimpath -ldflags "-s -w"
+          test -f build/bin/yellow-flash-amd64-installer.exe || { echo "::error::no installer was made"; exit 1; }
 
-      # No data folder in the zip: one beside the exe makes the copy portable.
+      # The installer, and a zip of the same files. No data folder in the
+      # zip: one beside the exe makes the copy portable.
       - name: Package
         run: |
           name="yellow-flash-${VERSION}-windows-amd64"
           mkdir -p "dist-release/$name"
-          cp build/bin/*.exe LICENSE NOTICE.md README.md "dist-release/$name/"
+          cp build/bin/yellow-flash-amd64-installer.exe "dist-release/$name-setup.exe"
+          cp "build/bin/Yellow Flash.exe" build/bin/yellowflash-*.exe LICENSE NOTICE.md README.md "dist-release/$name/"
+          cp -r extension "dist-release/$name/browser-extension"
           cd dist-release
           7z a -tzip "$name.zip" "$name" > /dev/null
           rm -rf "$name"
@@ -145,6 +160,7 @@ jobs:
           install -m 0755 build/bin/yellowflash-nmhost build/bin/yellowflash-cli build/bin/yellowflash-mcp "$d/"
           install -m 0644 build/appicon.png "$d/yellow-flash.png"
           install -m 0644 LICENSE NOTICE.md README.md "$d/"
+          cp -r extension "$d/browser-extension"
           cat > "$d/yellow-flash.desktop" <<'EOF'
           [Desktop Entry]
           Name=Yellow Flash

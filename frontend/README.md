@@ -51,6 +51,7 @@ src/
     Dialogs.tsx         Add URL, Options, Delete, Download Complete
     SchedulerDialog.tsx queues, schedules, data cap
     MediaGrabberDialog.tsx  videos through yt-dlp
+    BrowserSetupDialog.tsx  Connect Your Browsers: the extension in each installed browser
     BatchDialog.tsx, ChecksumDialog.tsx, SpeedLimiterDialog.tsx
     Modal.tsx           the dialog frame every dialog uses
   lib/                  formatting, file categories, plain-language error explanations

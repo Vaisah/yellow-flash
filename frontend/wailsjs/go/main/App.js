@@ -10,6 +10,10 @@ export function AddDownload(arg1) {
   return window['go']['main']['App']['AddDownload'](arg1);
 }
 
+export function AddExtensionTo(arg1) {
+  return window['go']['main']['App']['AddExtensionTo'](arg1);
+}
+
 export function AddToQueue(arg1, arg2) {
   return window['go']['main']['App']['AddToQueue'](arg1, arg2);
 }
@@ -90,6 +94,10 @@ export function FindCrashIssue(arg1) {
   return window['go']['main']['App']['FindCrashIssue'](arg1);
 }
 
+export function FinishBrowserSetup() {
+  return window['go']['main']['App']['FinishBrowserSetup']();
+}
+
 export function FlagsPicture() {
   return window['go']['main']['App']['FlagsPicture']();
 }
@@ -104,6 +112,10 @@ export function GetBrowserIntegration() {
 
 export function GetBrowserSettings() {
   return window['go']['main']['App']['GetBrowserSettings']();
+}
+
+export function GetBrowserSetup() {
+  return window['go']['main']['App']['GetBrowserSetup']();
 }
 
 export function GetDebridSettings() {

@@ -285,9 +285,11 @@ interface SettingsProps {
   info: AppInfo | null
   onClose: () => void
   onSaved: (s: Settings) => void
+  /** Opens Connect Your Browsers (the extension in each browser). */
+  onBrowserSetup: () => void
 }
 
-export function SettingsDialog({ settings, info, onClose, onSaved }: SettingsProps) {
+export function SettingsDialog({ settings, info, onClose, onSaved, onBrowserSetup }: SettingsProps) {
   const [activeTab, setActiveTab] = useState<'general' | 'filetypes' | 'saveto' | 'connection' | 'logins' | 'about'>('general')
   const [draft, setDraft] = useState<Settings>(settings)
   const [error, setError] = useState('')
@@ -439,6 +441,12 @@ export function SettingsDialog({ settings, info, onClose, onSaved }: SettingsPro
               />
               <span>Capture downloads from web browsers (Chrome, Edge, Firefox, Brave, Opera)</span>
             </label>
+            <div className="options-indent">
+              <button type="button" className="btn btn-sm" onClick={onBrowserSetup}>
+                Connect browsers…
+              </button>
+              <span className="options-note">Add the Yellow Flash extension to your browsers.</span>
+            </div>
 
             <label className="toggle">
               <input
