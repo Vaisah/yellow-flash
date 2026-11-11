@@ -7,6 +7,7 @@ require (
 	github.com/dop251/goja v0.0.0-20261025165251-a8d1dbc7cfe7
 	github.com/godbus/dbus/v5 v5.1.0
 	github.com/google/uuid v1.6.0
+	github.com/ulikunitz/xz v0.5.12
 	github.com/wailsapp/wails/v2 v2.15.0
 	golang.org/x/net v0.56.0
 	golang.org/x/sync v0.24.0

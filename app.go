@@ -60,6 +60,8 @@ type App struct {
 	// debrid holds the debrid accounts (the engine's unlockers) and the
 	// torrents sent to them.
 	debrid debridHost
+	// extracts extracts finished archives, one at a time.
+	extracts extractor
 
 	// Commands from the IPC channel wait here until the UI is ready.
 	commands chan ipc.Incoming
@@ -125,8 +127,13 @@ func (a *App) Startup(ctx context.Context) {
 		if e.Type == events.ProgressUpdated {
 			a.speeds.set(e.Progress.DownloadID, e.Progress.Speed)
 			runtime.EventsEmit(ctx, "downloads:progress", e.Progress)
-		} else if r := a.queues.Load(); r != nil {
-			r.Notify() // a download changed: its queue may start the next one
+		} else {
+			if r := a.queues.Load(); r != nil {
+				r.Notify() // a download changed: its queue may start the next one
+			}
+			if e.Download.Status == domain.Completed {
+				go a.downloadFinished(e.Download) // an archive may be extracted
+			}
 		}
 	})
 	// URLs typed by the user may legitimately point at LAN hosts (NAS,
@@ -209,6 +216,7 @@ func (a *App) Shutdown(ctx context.Context) {
 	}
 	a.stopTorrents()
 	a.stopDebrid() // before the downloads: its runs pause their files
+	a.stopExtracts()
 	canClose := true
 	if a.service != nil {
 		waitCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
