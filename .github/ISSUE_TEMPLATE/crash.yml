@@ -1,0 +1,47 @@
+# The crash report form. Yellow Flash's crash reports open it filled in:
+# the ids below are the address's parameters (internal/crash/github.go,
+# crash_app.go's CrashIssueURL), keep them in step. Text fields only, as in
+# Mister Download Manager's form this follows.
+name: Crash report
+description: Yellow Flash closed unexpectedly, and its crash report opened this form.
+labels: [bug, crash]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for sending this. **Yellow Flash filled this in**: if the report below says it was cut, drag its file (in the app's `crashes` folder) into the **Report** box.
+  - type: input
+    id: signature
+    attributes:
+      label: Signature
+      description: The problem's short name, the same in every report of it (it finds reports of the same problem).
+    validations:
+      required: true
+  - type: input
+    id: kind
+    attributes:
+      label: What happened
+      description: "panic (an internal error) or crash (a fatal error)."
+  - type: input
+    id: version
+    attributes:
+      label: Yellow Flash version
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: System
+  - type: textarea
+    id: what
+    attributes:
+      label: What you were doing
+      description: The steps that led to it, if you remember them; an address that shows it helps, if it isn't private.
+  - type: textarea
+    id: report
+    attributes:
+      label: Report
+      description: The crash report (cut to fit when long; drag its .txt file in for the whole of it).
+      render: text
+    validations:
+      required: true

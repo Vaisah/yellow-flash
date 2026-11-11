@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -16,6 +17,7 @@ import (
 	"github.com/vaisah/internal/application/download"
 	"github.com/vaisah/internal/application/events"
 	"github.com/vaisah/internal/application/queues"
+	"github.com/vaisah/internal/crash"
 	domain "github.com/vaisah/internal/domain/download"
 	"github.com/vaisah/internal/domain/queue"
 	"github.com/vaisah/internal/engine"
@@ -62,6 +64,13 @@ type App struct {
 	debrid debridHost
 	// extracts extracts finished archives, one at a time.
 	extracts extractor
+	// lastCrash is the report made at this start of the last run's crash
+	// (main.go), until the window asks for it.
+	crashMu   sync.Mutex
+	lastCrash *crash.Report
+	// logger writes <data>/logs (crash reports take its last lines).
+	logger *slog.Logger
+	logs   *crash.Rolling
 
 	// Commands from the IPC channel wait here until the UI is ready.
 	commands chan ipc.Incoming
@@ -145,8 +154,12 @@ func (a *App) Startup(ctx context.Context) {
 		runtime.LogErrorf(ctx, "network settings: %v", err)
 	}
 	// File-host links go through the user's debrid accounts (debrid_app.go).
+	// The engine logs into <data>/logs, which crash reports read.
+	if a.logger == nil {
+		a.logger, a.logs = crash.NewLogger(a.dataDir)
+	}
 	manager, err := engine.New(a.store, engine.Config{AllowPrivateNetworks: true, Publisher: publisher,
-		HostLimits: a.store, DNS: dns, Network: netOpts, Unlockers: a.debridAccounts()})
+		HostLimits: a.store, DNS: dns, Network: netOpts, Unlockers: a.debridAccounts(), Logger: a.logger})
 	if err != nil {
 		runtime.LogErrorf(ctx, "start download engine: %v", err)
 		return
@@ -230,6 +243,9 @@ func (a *App) Shutdown(ctx context.Context) {
 		if err := a.store.Close(); err != nil {
 			runtime.LogErrorf(ctx, "close database: %v", err)
 		}
+	}
+	if a.logs != nil {
+		_ = a.logs.Close()
 	}
 }
 

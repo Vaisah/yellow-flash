@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/vaisah/internal/crash"
 	"github.com/vaisah/internal/ipc"
 	"github.com/vaisah/internal/platform"
 	"github.com/wailsapp/wails/v2"
@@ -44,10 +45,22 @@ func main() {
 	}
 	defer lock.Close()
 
+	// The last run's crash, if it crashed, becomes a report; this run's
+	// would be written for the next start (internal/crash). After the lock:
+	// a second launch must not take the first's.
+	lastCrash, err := crash.Collect(dataDir, crash.ThisSystem(AppName, AppVersion))
+	if err != nil {
+		log.Printf("crash report: %v", err)
+	}
+	if _, err := crash.Install(dataDir); err != nil {
+		log.Printf("crash reports unavailable: %v", err)
+	}
+
 	app, err := NewApp(dataDir)
 	if err != nil {
 		log.Fatal(err)
 	}
+	app.lastCrash = lastCrash
 	if hasCmd {
 		app.handleCommand(ipc.Incoming{Cmd: cmd})
 	}

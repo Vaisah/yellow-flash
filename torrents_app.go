@@ -371,6 +371,9 @@ func (a *App) watchOnce(s *torrent.Torrents, l *torrent.List, acct *torrent.Acco
 }
 
 func (a *App) logf(format string, args ...any) {
+	if a.logger != nil {
+		a.logger.Warn(fmt.Sprintf(format, args...))
+	}
 	if a.ctx != nil {
 		wails.LogErrorf(a.ctx, format, args...)
 	}
