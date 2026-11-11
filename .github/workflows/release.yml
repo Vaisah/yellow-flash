@@ -1,0 +1,189 @@
+# Builds Yellow Flash when a GitHub release is published and attaches the
+# files to it. Run by hand (Actions → Release → Run workflow), it builds the
+# same files as workflow artifacts and uploads nothing.
+#
+# A release's tag is vX.Y.Z and must match ipc.AppVersion
+# (internal/ipc/datadir.go) and wails.json's productVersion.
+name: Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event.release.tag_name || github.ref }}
+  cancel-in-progress: false
+
+env:
+  WAILS_VERSION: v2.15.0
+  NODE_VERSION: '22'
+
+jobs:
+  version:
+    name: Check the version
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        name: Tag, app and wails.json agree
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          app=$(sed -n 's/^const AppVersion = "\(.*\)"$/\1/p' internal/ipc/datadir.go)
+          wails=$(jq -r .info.productVersion wails.json)
+          echo "app $app, wails.json $wails, tag ${TAG:-none}"
+          if [ -z "$app" ] || [ "$app" != "$wails" ]; then
+            echo "::error::ipc.AppVersion ($app) and wails.json productVersion ($wails) differ"
+            exit 1
+          fi
+          if [ -n "$TAG" ] && [ "$TAG" != "v$app" ]; then
+            echo "::error::the release tag $TAG is not v$app"
+            exit 1
+          fi
+          echo "version=$app" >> "$GITHUB_OUTPUT"
+
+  windows:
+    name: Windows (amd64)
+    needs: version
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: bash
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install Wails
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@${WAILS_VERSION}
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build the app
+        run: wails build -clean -trimpath -ldflags "-s -w"
+      # The app looks for the browser host beside its exe as yellowflash-nmhost.
+      - name: Build the helpers
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          go build -trimpath -ldflags "-s -w" -o build/bin/yellowflash-nmhost.exe ./cmd/nm-host
+          go build -trimpath -ldflags "-s -w" -o build/bin/yellowflash-cli.exe ./cmd/yellowflash-cli
+          go build -trimpath -ldflags "-s -w" -o build/bin/yellowflash-mcp.exe ./cmd/yellowflash-mcp
+
+      # No data folder in the zip: one beside the exe makes the copy portable.
+      - name: Package
+        run: |
+          name="yellow-flash-${VERSION}-windows-amd64"
+          mkdir -p "dist-release/$name"
+          cp build/bin/*.exe LICENSE NOTICE.md README.md "dist-release/$name/"
+          cd dist-release
+          7z a -tzip "$name.zip" "$name" > /dev/null
+          rm -rf "$name"
+          ls -l
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist-release/*
+          if-no-files-found: error
+
+  linux:
+    name: Linux (amd64)
+    needs: version
+    runs-on: ubuntu-24.04
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install GTK 3 and WebKitGTK 4.1
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install Wails
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@${WAILS_VERSION}
+
+      - name: Test
+        run: go test -tags webkit2_41 ./...
+
+      - name: Build the app
+        run: wails build -clean -trimpath -tags webkit2_41 -ldflags "-s -w"
+      - name: Build the helpers
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          go build -trimpath -ldflags "-s -w" -o build/bin/yellowflash-nmhost ./cmd/nm-host
+          go build -trimpath -ldflags "-s -w" -o build/bin/yellowflash-cli ./cmd/yellowflash-cli
+          go build -trimpath -ldflags "-s -w" -o build/bin/yellowflash-mcp ./cmd/yellowflash-mcp
+
+      - name: Package
+        run: |
+          name="yellow-flash-${VERSION}-linux-amd64"
+          d="dist-release/$name"
+          mkdir -p "$d"
+          install -m 0755 "build/bin/Yellow Flash" "$d/yellow-flash"
+          install -m 0755 build/bin/yellowflash-nmhost build/bin/yellowflash-cli build/bin/yellowflash-mcp "$d/"
+          install -m 0644 build/appicon.png "$d/yellow-flash.png"
+          install -m 0644 LICENSE NOTICE.md README.md "$d/"
+          cat > "$d/yellow-flash.desktop" <<'EOF'
+          [Desktop Entry]
+          Name=Yellow Flash
+          Comment=Fast, resumable multi-connection downloads
+          Exec=yellow-flash
+          Icon=yellow-flash
+          Terminal=false
+          Type=Application
+          Categories=Network;FileTransfer;
+          StartupNotify=true
+          EOF
+          tar -C dist-release -czf "dist-release/$name.tar.gz" "$name"
+          rm -rf "$d"
+          ls -l dist-release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: dist-release/*
+          if-no-files-found: error
+
+  publish:
+    name: Attach to the release
+    needs: [version, windows, linux]
+    if: github.event_name == 'release'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - name: Checksums
+        working-directory: out
+        run: |
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+      - name: Upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG" out/* --clobber --repo "$GITHUB_REPOSITORY"
