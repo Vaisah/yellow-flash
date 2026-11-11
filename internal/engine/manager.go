@@ -166,6 +166,22 @@ type entry struct {
 	tracker *tracker
 	// limiter enforces the download's own speed limit while it runs.
 	limiter *Limiter
+	// seen learns where the run's answers come from (its server).
+	seen *network.ServerSeen
+}
+
+// noteServerLocked keeps what the run learnt of its server on the record.
+func noteServerLocked(e *entry) {
+	if e.seen == nil {
+		return
+	}
+	if s, ok := e.seen.Get(); ok {
+		info := &domain.ServerInfo{RTTMillis: s.RTT.Milliseconds(), Proxied: s.Proxied, CDN: s.CDN}
+		if s.IP.IsValid() {
+			info.IP = s.IP.String()
+		}
+		e.d.Server = info
+	}
 }
 
 // Manager owns download lifecycles. It is the single authority for status

@@ -44,6 +44,7 @@ func (m *Manager) run(ctx context.Context, e *entry) {
 // state, and it persists that state before releasing waiters.
 func (m *Manager) finish(e *entry, err error) {
 	m.mu.Lock()
+	noteServerLocked(e)
 	d := e.d
 	cleanup := false
 	switch {
@@ -80,7 +81,10 @@ func (m *Manager) finish(e *entry, err error) {
 // execute probes, transfers, verifies and publishes, restarting from zero
 // when the remote representation changes underneath us.
 func (m *Manager) execute(ctx context.Context, e *entry) error {
+	seen := &network.ServerSeen{}
+	ctx = network.WithServerSeen(ctx, seen)
 	m.mu.Lock()
+	e.seen = seen
 	d := e.d.Clone()
 	m.mu.Unlock()
 	secret, err := m.cfg.Secrets.Get(ctx, d.ID)
@@ -285,6 +289,7 @@ func (m *Manager) applyMetadata(ctx context.Context, e *entry, meta domain.Remot
 	if d.StartedAt.IsZero() {
 		d.StartedAt = time.Now().UTC()
 	}
+	noteServerLocked(e)
 	if d.Status == domain.Initializing {
 		_ = d.Transition(domain.Downloading)
 	}

@@ -116,6 +116,10 @@ func NewClient(opts Options) *http.Client {
 			proxy = http.ProxyURL(u)
 		}
 	}
+	// A download's ServerSeen learns a proxy carried its request.
+	if proxy != nil {
+		proxy = seenProxy(proxy)
+	}
 	// Untrusted addresses through a proxy: the proxy is the user's own
 	// setting (often on this computer), so connecting to it is allowed; the
 	// target is checked before the request is handed to it (guardedProxy).
@@ -163,6 +167,8 @@ func NewClient(opts Options) *http.Client {
 	if guarded != nil {
 		rt = &guardedProxy{base: transport, proxy: guarded, dns: resolver}
 	}
+	// Who answered, and how far (a download's ServerSeen; server.go).
+	rt = seenTripper{base: rt}
 	maxRedirects := opts.MaxRedirects
 	return &http.Client{
 		Transport: rt,

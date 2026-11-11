@@ -65,6 +65,14 @@ key its token is kept under are changed. Each file starts with a header saying s
   Mister Download Manager's release key with one of its signed lists (used only to test the
   Ed25519 signature check; Yellow Flash never trusts that key), from Mister Download Manager's
   `crates/tools/tests/fixtures` and `crates/tools/keys`.
+- `internal/geo/data/ipcountry.bin.xz`: IP to country, from DB-IP's IP to Country Lite database
+  (https://db-ip.com, dbip-country-lite-2026-11), under the Creative Commons Attribution 4.0
+  International License (https://creativecommons.org/licenses/by/4.0/). **IP Geolocation by
+  DB-IP.** Built into a range table by Mister Download Manager's `tools/geo/build.py`
+  (`internal/geo/data/SOURCE.txt`); the app shows this credit wherever it shows a country.
+- `internal/geo/data/flags.png`: the countries' flags, from lipis/flag-icons, © 2013 Panayiotis
+  Lipiridis, MIT (`internal/geo/data/LICENSE-flag-icons`), drawn into one picture by Mister
+  Download Manager's `crates/geo/examples/flag_atlas.rs`.
 
 Assets ported from Mister Download Manager keep their own licences, as listed in its
 `ATTRIBUTION.md`. When one of them is added to this repository, list it here with its author,
