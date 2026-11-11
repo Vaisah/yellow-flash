@@ -14,6 +14,8 @@ export function AddDebridToken(arg1:string,arg2:string):Promise<main.DebridAccou
 
 export function AddDownload(arg1:main.AddRequest):Promise<download.Download>;
 
+export function AddExtensionTo(arg1:string):Promise<string>;
+
 export function AddToQueue(arg1:string,arg2:Array<string>):Promise<void>;
 
 export function AddTorrent(arg1:main.AddTorrentRequest):Promise<main.TorrentRow>;
@@ -54,6 +56,8 @@ export function FileChecksum(arg1:string,arg2:string):Promise<string>;
 
 export function FindCrashIssue(arg1:string):Promise<crash.Found>;
 
+export function FinishBrowserSetup():Promise<void>;
+
 export function FlagsPicture():Promise<string>;
 
 export function ForgetHelper(arg1:string):Promise<main.HelperInfo>;
@@ -61,6 +65,8 @@ export function ForgetHelper(arg1:string):Promise<main.HelperInfo>;
 export function GetBrowserIntegration():Promise<main.BrowserIntegration>;
 
 export function GetBrowserSettings():Promise<browser.CaptureRules>;
+
+export function GetBrowserSetup():Promise<main.BrowserSetup>;
 
 export function GetDebridSettings():Promise<main.DebridSettings>;
 

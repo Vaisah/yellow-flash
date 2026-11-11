@@ -127,4 +127,17 @@ func TestTheWindowsDialogsWork(t *testing.T) {
 	if o, err = a.SaveOptions(o); err != nil || o.ShowComplete {
 		t.Fatal(o, err)
 	}
+
+	// The browser setup window: a list (never null), and once done it is
+	// not offered at start again.
+	bs := a.GetBrowserSetup()
+	if bs.Browsers == nil {
+		t.Fatal("null browser list")
+	}
+	if err := a.FinishBrowserSetup(); err != nil || a.GetBrowserSetup().Offer {
+		t.Fatal("offered after done", err)
+	}
+	if _, err := a.AddExtensionTo("Netscape"); err == nil {
+		t.Fatal("a browser that isn't installed")
+	}
 }

@@ -37,6 +37,10 @@ const firefoxKey = `Software\Mozilla\NativeMessagingHosts`
 // 64-bit Windows.
 const chromeExternalKey = `Software\Google\Chrome\Extensions`
 
+// edgeExternalKey is Edge's: an entry naming the Edge Add-ons extension
+// makes Edge offer it at its next start.
+const edgeExternalKey = `Software\Microsoft\Edge\Extensions`
+
 func rootKey(allUsers bool) registry.Key {
 	if allUsers {
 		return registry.LOCAL_MACHINE
@@ -99,6 +103,12 @@ func register(allUsers bool) error {
 			return err
 		}
 	}
+	// Edge the same, once the extension is in Edge Add-ons.
+	if id, ok := browser.EdgeIDValid(); ok {
+		if err := setValue(root, edgeExternalKey+`\`+id, "update_url", browser.EdgeAddonsUpdateURL, registry.WOW64_32KEY); err != nil {
+			return err
+		}
+	}
 	fmt.Printf("registered %s for Chrome, Edge, Brave, Helium and the other Chromium browsers (%s), "+
 		"and for Firefox, Zen and its other forks (%s)\n", browser.HostName, path, ffPath)
 	return nil
@@ -111,6 +121,9 @@ func unregister(allUsers bool) error {
 	}
 	if id, ok := browser.StoreIDValid(); ok {
 		deleteKey(root, chromeExternalKey+`\`+id, registry.WOW64_32KEY)
+	}
+	if id, ok := browser.EdgeIDValid(); ok {
+		deleteKey(root, edgeExternalKey+`\`+id, registry.WOW64_32KEY)
 	}
 	if program, err := thisProgram(); err == nil {
 		dir := filepath.Dir(program)

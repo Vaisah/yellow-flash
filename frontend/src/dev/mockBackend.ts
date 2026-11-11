@@ -255,6 +255,16 @@ export function installMockBackend() {
     RemoveSiteLogin: (site) => { logins = logins.filter((l) => l.site !== site); return later([...logins]) },
     GetOptions: () => later({ ...options }),
     SaveOptions: (o) => { options = { ...o }; return later({ ...options }) },
+    GetBrowserSetup: () => later({
+      browsers: [
+        { name: 'Google Chrome', family: 'chromium' as const, connected: false, version: '', store: '', unpacked: true },
+        { name: 'Microsoft Edge', family: 'chromium' as const, connected: true, version: '0.2.0', store: '', unpacked: true },
+        { name: 'Mozilla Firefox', family: 'firefox' as const, connected: false, version: '', store: '', unpacked: false },
+      ],
+      extensionDir: 'C:\\Program Files\\Yellow Flash\\browser-extension', hostReady: true, portable: false, offer: false,
+    }),
+    AddExtensionTo: () => later('unpacked' as const),
+    FinishBrowserSetup: async () => undefined,
     ServerLocation: () => later({ place: 'unknown' as const, attribution: 'IP Geolocation by DB-IP', attributionUrl: 'https://db-ip.com' }),
     FlagsPicture: () => later(''),
     ExtractDownload: async () => undefined,

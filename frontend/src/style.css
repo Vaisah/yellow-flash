@@ -2593,3 +2593,135 @@ button:disabled {
     height: 36px;
   }
 }
+
+/* A problem told inside a dialog (a link that isn't a file, a missing helper). */
+.link-problem {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 14px;
+  border: 1px solid var(--status-warn);
+  border-radius: 8px;
+  background: var(--bg-input);
+  color: var(--status-warn);
+}
+.link-problem strong {
+  display: block;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+.link-problem p {
+  margin: 2px 0 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.link-problem p:last-child {
+  margin-bottom: 0;
+}
+
+/* Footer note beside the buttons. */
+.foot-hint {
+  margin-right: auto;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.foot-error + .foot-hint {
+  display: none;
+}
+
+/* Connect Your Browsers */
+.browser-setup {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.browser-setup-intro,
+.browser-setup-empty {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+.browser-setup-empty {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.browser-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.browser-row {
+  border: 1px solid var(--border-normal);
+  border-radius: 8px;
+  background: var(--bg-input);
+  padding: 10px 14px;
+}
+.browser-row.connected {
+  border-color: var(--status-ok);
+}
+.browser-row-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 28px;
+}
+.browser-row-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.browser-row-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  text-align: right;
+}
+.browser-row-status.ok {
+  color: var(--status-ok);
+}
+.browser-row-status.muted {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.browser-steps {
+  margin: 10px 0 2px;
+  padding: 10px 12px 10px 30px;
+  border-top: 1px solid var(--border-subtle);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+div.browser-steps {
+  padding-left: 12px;
+}
+.browser-steps p {
+  margin: 0;
+}
+.browser-steps strong {
+  color: var(--text-primary);
+}
+.browser-steps-folder {
+  margin-top: 6px;
+}
+.browser-steps-folder input {
+  min-width: 0;
+}
+
+/* A button under an Options switch, with its note. */
+.options-indent {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: -4px 0 6px 26px;
+}
+.options-note {
+  font-size: 11px;
+  color: var(--text-muted);
+}

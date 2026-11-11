@@ -198,6 +198,28 @@ export interface AppInfo {
   dataDir: string
 }
 
+/** One installed browser in the browser setup window. */
+export interface BrowserTarget {
+  name: string
+  family: 'chromium' | 'firefox'
+  /** Its extension has reached Yellow Flash. */
+  connected: boolean
+  version: string
+  /** The store page that adds the extension, once it is listed; "" before. */
+  store: string
+  /** It can load the extension from extensionDir (Developer mode → Load unpacked). */
+  unpacked: boolean
+}
+
+export interface BrowserSetup {
+  browsers: BrowserTarget[]
+  extensionDir: string
+  hostReady: boolean
+  portable: boolean
+  /** Open the window at start: nothing connected yet and not dismissed. */
+  offer: boolean
+}
+
 export const ACTIVE_STATUSES: Status[] = ['INITIALIZING', 'DOWNLOADING', 'PAUSING', 'VERIFYING']
 export const isActive = (s: Status) => ACTIVE_STATUSES.includes(s)
 export const canResume = (s: Status) => s === 'PAUSED' || s === 'QUEUED' || s === 'FAILED'
