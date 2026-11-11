@@ -43,8 +43,11 @@ func TestSegmentedDownload(t *testing.T) {
 	e := newEnv(t, func(c *engine.Config) { c.Connections = 8 })
 	d := e.waitCompleted(e.add(fs.url("/files/seg.bin"), "seg.bin", 8))
 	e.assertFile(d, data)
-	if got := fs.rangeRequests.Load(); got < 9 {
-		t.Fatalf("expected probe + 8 range requests, got %d", got)
+	// The first request ("bytes=0-") is the probe and connection 1's data at
+	// once, so 8 connections make at least 8 range requests; more when a
+	// connection that finishes early splits another's remainder.
+	if got := fs.rangeRequests.Load(); got < 8 {
+		t.Fatalf("expected at least 8 range requests (one per connection), got %d", got)
 	}
 	progress, maxActive, leaked := e.events.stats()
 	chunks := len(data) / (16 << 10)
@@ -205,10 +208,11 @@ func TestConnectionReset(t *testing.T) {
 	e := newEnv(t, nil)
 	d := e.waitCompleted(e.add(fs.url("/files/reset.bin"), "reset.bin", 4))
 	e.assertFile(d, data)
-	// Each reset forces a re-request: 1 probe + 4 segments + 4 re-requests.
-	// Most are engine retries; a reset that lands before the response
-	// headers are read is re-sent transparently by net/http instead.
-	if got := fs.rangeRequests.Load(); got < 9 || d.Retries < 1 || resets.Load() < 4 {
+	// Each reset forces a re-request: 4 connections (the first is also the
+	// probe) + 4 re-requests. Most are engine retries; a reset that lands
+	// before the response headers are read is re-sent transparently by
+	// net/http instead.
+	if got := fs.rangeRequests.Load(); got < 8 || d.Retries < 1 || resets.Load() < 4 {
 		t.Fatalf("range requests=%d engine retries=%d resets=%d", got, d.Retries, resets.Load())
 	}
 	// Resets cost at most the bytes in flight (4 x 100 KiB) plus what the
