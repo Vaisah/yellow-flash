@@ -53,6 +53,9 @@ type App struct {
 	stopQueues context.CancelFunc
 	// media holds the video and gallery downloads run by the helpers.
 	media mediaJobs
+	// browserVideos: what the browser sent with the pages its video button
+	// opened in the Download video window (browser_video_app.go).
+	browserVideos browserVideos
 	// torrents holds the torrent session and list.
 	torrents torrentHost
 	// remote is the remote control (set at startup); speeds are the

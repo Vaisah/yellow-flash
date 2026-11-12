@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { DragEvent } from 'react'
 import { CheckCircle2, CircleAlert, Info, Plus, X } from 'lucide-react'
-import { backend, copyText, errorMessage, onAddRequest, onEvent, onNotice } from './api'
+import { backend, copyText, errorMessage, onAddRequest, onEvent, onNotice, onVideoRequest } from './api'
 import { useDownloads } from './hooks/useDownloads'
 import { CATEGORIES, categoryOf } from './lib/categories'
 import type { Category } from './lib/categories'
 import { explainError } from './lib/errors'
 import { formatBytes } from './lib/format'
+import { isMedia, mediaDownload, mediaId, mediaProgress } from './lib/media'
 import { Sidebar, StatusBar, Toolbar } from './components/Chrome'
 import type { StatusFilter } from './components/Chrome'
 import { DownloadTable, sortRows } from './components/DownloadTable'
@@ -20,7 +21,7 @@ import { SpeedLimiterDialog } from './components/SpeedLimiterDialog'
 import { MediaGrabberDialog } from './components/MediaGrabberDialog'
 import { BrowserSetupDialog } from './components/BrowserSetupDialog'
 import { canCancel, canDelete, canPause, canResume, isActive } from './types'
-import type { AppInfo, DiskInfo, Download, ExtractResult, MediaRow, Settings } from './types'
+import type { AppInfo, DiskInfo, Download, ExtractResult, MediaProgress, MediaRow, Progress, Settings } from './types'
 import logo from './assets/yellow-flash-256.png'
 
 type Dialog =
@@ -29,7 +30,7 @@ type Dialog =
   | { kind: 'delete'; d: Download }
   | { kind: 'scheduler' }
   | { kind: 'batch' }
-  | { kind: 'media' }
+  | { kind: 'media'; url?: string; seq?: number }
   | { kind: 'speed' }
   | { kind: 'checksum'; d: Download }
   | { kind: 'complete'; d: Download }
@@ -59,6 +60,11 @@ function matchesStatus(d: Download, f: StatusFilter): boolean {
   }
 }
 
+/** A video download is a Video whatever its file will be called. */
+function categoryOfRow(d: Download): Category {
+  return d.media === 'video' ? 'video' : categoryOf(d.filename)
+}
+
 function isTyping(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null
   return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)
@@ -71,7 +77,18 @@ function explainToast(text: string): string {
 }
 
 export default function App() {
-  const { items, progress, loaded, loadError, removeLocal, upsertLocal } = useDownloads()
+  const { items: engineItems, progress: engineProgress, loaded, loadError, removeLocal, upsertLocal } = useDownloads()
+  /* Video and gallery downloads (yt-dlp): rows of the same list, for the session. */
+  const [mediaRows, setMediaRows] = useState<MediaRow[]>([])
+  const items = useMemo(() => [...mediaRows.map(mediaDownload), ...engineItems], [mediaRows, engineItems])
+  const progress = useMemo(() => {
+    const all: Record<string, Progress> = { ...engineProgress }
+    for (const r of mediaRows) {
+      const p = mediaProgress(r)
+      if (p) all[p.downloadId] = p
+    }
+    return all
+  }, [engineProgress, mediaRows])
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS)
   const [info, setInfo] = useState<AppInfo | null>(null)
   const [category, setCategory] = useState<Category>('all')
@@ -127,12 +144,26 @@ export default function App() {
   useEffect(() => onEvent<{ stats: { upSpeed: number } }[]>('torrents:progress', (rows) =>
     setUploadSpeed((rows ?? []).reduce((sum, r) => sum + (r.stats?.upSpeed > 0 ? r.stats.upSpeed : 0), 0))), [])
 
-  /* Video downloads (yt-dlp) end outside the list: said in a toast. */
+  /* Video downloads (yt-dlp): loaded once, then kept current by their events. */
+  const refreshMedia = useCallback(() => backend().ListMediaDownloads().then((rows) => setMediaRows(rows ?? [])).catch(() => undefined), [])
+  useEffect(() => { void refreshMedia() }, [refreshMedia])
+  useEffect(() => onEvent<{ id: string; progress: MediaProgress }>('media:progress', (e) => {
+    setMediaRows((rows) => {
+      const i = rows.findIndex((r) => r.id === e.id)
+      if (i < 0) {
+        void refreshMedia()
+        return rows
+      }
+      const next = rows.slice()
+      next[i] = { ...rows[i], progress: e.progress }
+      return next
+    })
+  }), [refreshMedia])
   useEffect(() => onEvent<string>('media:changed', (id) => {
     backend().ListMediaDownloads().then((rows: MediaRow[]) => {
+      setMediaRows(rows ?? [])
       const r = rows.find((x) => x.id === id)
-      if (r?.progress.state === 'done') toast('ok', `Video saved: ${r.title}`)
-      else if (r?.progress.state === 'failed') toast('error', `Could not download the video ${r.title}: ${r.progress.error ?? ''}`)
+      if (r?.progress.state === 'failed') toast('error', `Could not download the video ${r.title}: ${r.progress.error ?? ''}`)
     }).catch(() => undefined)
   }), [toast])
 
@@ -154,6 +185,8 @@ export default function App() {
   useEffect(() => onAddRequest((p) => setDialog({
     kind: 'add', url: p.url, filename: p.filename || undefined, directory: p.directory || undefined, seq: ++addSeq.current,
   })), [])
+  /* The browser's video button: the Download video window, looking the page up. */
+  useEffect(() => onVideoRequest((p) => setDialog({ kind: 'media', url: p.url, seq: ++addSeq.current })), [])
   useEffect(() => onNotice((n) => toast(n.kind, n.text)), [toast])
 
   /* ---------- derived lists ---------- */
@@ -168,7 +201,7 @@ export default function App() {
     const c = Object.fromEntries(CATEGORIES.map((x) => [x.id, 0])) as Record<Category, number>
     for (const d of items) {
       c.all++
-      const cat = categoryOf(d.filename)
+      const cat = categoryOfRow(d)
       if (c[cat] !== undefined) c[cat]++
     }
     return c
@@ -178,7 +211,7 @@ export default function App() {
     const q = search.trim().toLowerCase()
     const filtered = items.filter((d) =>
       matchesStatus(d, statusFilter) &&
-      (category === 'all' || categoryOf(d.filename) === category) &&
+      (category === 'all' || categoryOfRow(d) === category) &&
       (q === '' || d.filename.toLowerCase().includes(q) || d.url.toLowerCase().includes(q)))
     return sortRows(filtered, progress, sort)
   }, [items, progress, statusFilter, category, search, sort])
@@ -241,19 +274,39 @@ export default function App() {
     }
   }, [toast])
 
+  /* A video download can't be paused or resumed: stopping ends it, and starting
+     it again goes through the Download video window. */
+  const forgetRow = useCallback((id: string) => {
+    if (selectedId === id) setSelectedId(null)
+    setCheckedIds((prev) => {
+      if (!prev.has(id)) return prev
+      const next = new Set(prev)
+      next.delete(id)
+      return next
+    })
+  }, [selectedId])
+  const removeMedia = useCallback((d: Download) => void call(async () => {
+    await backend().RemoveMediaDownload(mediaId(d))
+    setMediaRows((rows) => rows.filter((r) => r.id !== mediaId(d)))
+    forgetRow(d.id)
+    toast('info', d.status === 'COMPLETED' ? 'Removed from the list (the file stays)' : 'Download removed')
+  }, 'Could not remove'), [call, toast, forgetRow])
+  const againMedia = useCallback((d: Download) => setDialog({ kind: 'media', url: d.url, seq: ++addSeq.current }), [])
+  const notForMedia = useCallback(() => toast('info', 'Not available for a video download'), [toast])
+
   const actions: RowActions = useMemo(() => ({
-    resume: (d) => void call(() => backend().ResumeDownload(d.id), 'Could not resume'),
-    pause: (d) => void call(() => backend().PauseDownload(d.id), 'Could not pause'),
-    cancel: (d) => void call(() => backend().CancelDownload(d.id), 'Could not cancel'),
-    retry: (d) => void call(() => backend().RetryDownload(d.id), 'Could not retry'),
-    remove: (d) => setDialog({ kind: 'delete', d }),
-    openFile: (d) => void call(() => backend().OpenFile(d.id), 'Could not open the file'),
-    showInFolder: (d) => void call(() => backend().ShowInFolder(d.id), 'Could not open the folder'),
+    resume: (d) => isMedia(d) ? againMedia(d) : void call(() => backend().ResumeDownload(d.id), 'Could not resume'),
+    pause: (d) => void call(() => isMedia(d) ? backend().StopMediaDownload(mediaId(d)) : backend().PauseDownload(d.id), 'Could not pause'),
+    cancel: (d) => void call(() => isMedia(d) ? backend().StopMediaDownload(mediaId(d)) : backend().CancelDownload(d.id), 'Could not cancel'),
+    retry: (d) => isMedia(d) ? againMedia(d) : void call(() => backend().RetryDownload(d.id), 'Could not retry'),
+    remove: (d) => isMedia(d) ? removeMedia(d) : setDialog({ kind: 'delete', d }),
+    openFile: (d) => void call(() => isMedia(d) ? backend().OpenMediaFile(mediaId(d)) : backend().OpenFile(d.id), 'Could not open the file'),
+    showInFolder: (d) => void call(() => isMedia(d) ? backend().ShowMediaInFolder(mediaId(d)) : backend().ShowInFolder(d.id), 'Could not open the folder'),
     copyLink: (d) => void call(async () => { await copyText(d.url); toast('info', 'Link copied to clipboard') }, 'Could not copy'),
-    verifyChecksum: (d) => setDialog({ kind: 'checksum', d }),
-    extract: (d) => void call(async () => { await backend().ExtractDownload(d.id, ''); toast('info', `Extracting ${d.filename}…`) }, 'Could not extract'),
-    addToQueue: (d) => void call(async () => { await backend().AddToQueue('main', [d.id]); toast('ok', `${d.filename} added to the main queue`) }, 'Could not add it to the queue'),
-  }), [call, toast])
+    verifyChecksum: (d) => isMedia(d) ? notForMedia() : setDialog({ kind: 'checksum', d }),
+    extract: (d) => isMedia(d) ? notForMedia() : void call(async () => { await backend().ExtractDownload(d.id, ''); toast('info', `Extracting ${d.filename}…`) }, 'Could not extract'),
+    addToQueue: (d) => isMedia(d) ? notForMedia() : void call(async () => { await backend().AddToQueue('main', [d.id]); toast('ok', `${d.filename} added to the main queue`) }, 'Could not add it to the queue'),
+  }), [call, toast, againMedia, removeMedia, notForMedia])
 
   const openAdd = useCallback(async (prefill?: string) => {
     let url = prefill ?? ''
@@ -518,7 +571,7 @@ export default function App() {
       )}
       {dialog?.kind === 'scheduler' && (
         <SchedulerDialog
-          downloads={items}
+          downloads={engineItems}
           onClose={() => setDialog(null)}
           onStartQueue={(name) => toast('ok', `Queue "${name}" started`)}
           onStopQueue={(name) => toast('info', `Queue "${name}" stopped`)}
@@ -532,8 +585,13 @@ export default function App() {
       )}
       {dialog?.kind === 'media' && (
         <MediaGrabberDialog
+          key={dialog.seq ?? 0}
+          initialUrl={dialog.url}
           onClose={() => setDialog(null)}
-          onStarted={(title, quality) => toast('ok', `Downloading the video ${title} (${quality})`)}
+          onStarted={(title, quality) => {
+            void refreshMedia()
+            toast('ok', `Downloading the video ${title} (${quality})`)
+          }}
         />
       )}
       {dialog?.kind === 'speed' && (

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { AlertTriangle, Download, Film, Globe, Loader2, Music, Video } from 'lucide-react'
 import { Modal } from './Modal'
 import { backend, errorMessage } from '../api'
@@ -6,6 +6,8 @@ import { formatBytes } from '../lib/format'
 import type { VideoLookUp } from '../types'
 
 interface Props {
+  /** A page to look up at once (from the browser's video button). */
+  initialUrl?: string
   onClose: () => void
   /** A video download started (it runs with yt-dlp, outside the list). */
   onStarted: (title: string, quality: string) => void
@@ -21,8 +23,9 @@ function duration(s: number): string {
 
 const isAudio = (label: string, ext: string) => /audio|mp3|m4a|opus/i.test(label) || ['mp3', 'm4a', 'opus', 'ogg', 'wav'].includes(ext)
 
-export function MediaGrabberDialog({ onClose, onStarted }: Props) {
-  const [pageUrl, setPageUrl] = useState('')
+export function MediaGrabberDialog({ initialUrl, onClose, onStarted }: Props) {
+  const [pageUrl, setPageUrl] = useState(initialUrl ?? '')
+  const lookedUpInitial = useRef(false)
   const [isInspecting, setIsInspecting] = useState(false)
   const [found, setFound] = useState<VideoLookUp | null>(null)
   const [selected, setSelected] = useState(0)
@@ -36,6 +39,14 @@ export function MediaGrabberDialog({ onClose, onStarted }: Props) {
       .then((hs) => setHasYtDlp(hs.some((h) => h.name === 'yt-dlp' && h.exe !== '')))
       .catch(() => setHasYtDlp(false))
   }, [])
+
+  // A page from the browser is looked up as soon as yt-dlp is there (after
+  // installing it, too).
+  useEffect(() => {
+    if (!hasYtDlp || !initialUrl || lookedUpInitial.current) return
+    lookedUpInitial.current = true
+    void handleInspect(initialUrl)
+  }, [hasYtDlp, initialUrl])
 
   const choices = found?.choices ?? []
 
@@ -52,13 +63,13 @@ export function MediaGrabberDialog({ onClose, onStarted }: Props) {
     }
   }
 
-  const handleInspect = async () => {
-    if (!pageUrl.trim()) return
+  const handleInspect = async (address = pageUrl) => {
+    if (!address.trim()) return
     setIsInspecting(true)
     setError('')
     setFound(null)
     try {
-      const v = await backend().LookUpVideo(pageUrl.trim(), navigator.language || 'en')
+      const v = await backend().LookUpVideo(address.trim(), navigator.language || 'en')
       setFound(v)
       setSelected(0)
       if (v.list) setError(`This page lists ${v.list.total > 0 ? v.list.total : 'several'} videos; open one video's own page to download it.`)

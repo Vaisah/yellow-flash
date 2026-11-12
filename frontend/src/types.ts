@@ -24,6 +24,8 @@ export interface Download {
   queueId?: string
   /** Where its answers came from (its last run's). */
   server?: ServerInfo
+  /** A video or gallery download (yt-dlp, gallery-dl): its row only (lib/media.ts). */
+  media?: 'video' | 'gallery'
   createdAt: string
   startedAt: string
   completedAt: string
@@ -180,7 +182,11 @@ export interface MediaProgress {
   speed: number
 }
 
-export interface MediaRow { id: string; kind: 'video' | 'gallery'; title: string; url: string; progress: MediaProgress }
+export interface MediaRow {
+  id: string; kind: 'video' | 'gallery'; title: string; url: string; progress: MediaProgress
+  /** Its folder, and when it started. */
+  dir: string; started: string
+}
 
 export interface ExtractResult {
   id: string

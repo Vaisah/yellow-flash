@@ -238,6 +238,10 @@ export function OpenFolder(arg1) {
   return window['go']['main']['App']['OpenFolder'](arg1);
 }
 
+export function OpenMediaFile(arg1) {
+  return window['go']['main']['App']['OpenMediaFile'](arg1);
+}
+
 export function PauseAll() {
   return window['go']['main']['App']['PauseAll']();
 }
@@ -268,6 +272,10 @@ export function RemoveDebridTorrent(arg1) {
 
 export function RemoveFromQueue(arg1) {
   return window['go']['main']['App']['RemoveFromQueue'](arg1);
+}
+
+export function RemoveMediaDownload(arg1) {
+  return window['go']['main']['App']['RemoveMediaDownload'](arg1);
 }
 
 export function RemoveRemoteDevice(arg1) {
@@ -376,6 +384,10 @@ export function ShowCrashReports() {
 
 export function ShowInFolder(arg1) {
   return window['go']['main']['App']['ShowInFolder'](arg1);
+}
+
+export function ShowMediaInFolder(arg1) {
+  return window['go']['main']['App']['ShowMediaInFolder'](arg1);
 }
 
 export function ShowTorrentFolder(arg1) {

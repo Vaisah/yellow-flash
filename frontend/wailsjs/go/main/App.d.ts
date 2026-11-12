@@ -128,6 +128,8 @@ export function OpenFile(arg1:string):Promise<void>;
 
 export function OpenFolder(arg1:string):Promise<void>;
 
+export function OpenMediaFile(arg1:string):Promise<void>;
+
 export function PauseAll():Promise<void>;
 
 export function PauseDownload(arg1:string):Promise<void>;
@@ -143,6 +145,8 @@ export function RemoveDebridAccount(arg1:string):Promise<void>;
 export function RemoveDebridTorrent(arg1:string):Promise<void>;
 
 export function RemoveFromQueue(arg1:string):Promise<void>;
+
+export function RemoveMediaDownload(arg1:string):Promise<void>;
 
 export function RemoveRemoteDevice(arg1:string):Promise<void>;
 
@@ -197,6 +201,8 @@ export function SetSpeedLimit(arg1:main.SpeedLimit):Promise<main.SpeedLimit>;
 export function ShowCrashReports():Promise<void>;
 
 export function ShowInFolder(arg1:string):Promise<void>;
+
+export function ShowMediaInFolder(arg1:string):Promise<void>;
 
 export function ShowTorrentFolder(arg1:string):Promise<void>;
 

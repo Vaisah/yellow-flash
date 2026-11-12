@@ -23,6 +23,13 @@ export function onAddRequest(cb: (p: AddPrefill) => void): () => void {
   return window.runtime?.EventsOn('app:add-url', cb) ?? (() => {})
 }
 
+/** The browser's video button: open the Download video window on this page. */
+export interface VideoPrefill { url: string }
+
+export function onVideoRequest(cb: (p: VideoPrefill) => void): () => void {
+  return window.runtime?.EventsOn('app:video', cb) ?? (() => {})
+}
+
 /** A message from the backend to show as a toast (a silent add's result). */
 export interface Notice { kind: 'ok' | 'error' | 'info'; text: string }
 

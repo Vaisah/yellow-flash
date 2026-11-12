@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/vaisah/internal/infrastructure/filesystem"
 	"github.com/vaisah/internal/infrastructure/network"
+	"github.com/vaisah/internal/platform"
 	"github.com/vaisah/internal/tools"
 	wails "github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -179,7 +180,7 @@ func (a *App) LookUpVideo(pageURL, language string) (VideoLookUp, error) {
 	if !ok {
 		return VideoLookUp{}, errors.New("yt-dlp is not installed")
 	}
-	looked, err := tools.LookUpPage(context.Background(), ytdlp.Exe, pageURL, tools.FromBrowser{})
+	looked, err := tools.LookUpPage(context.Background(), ytdlp.Exe, pageURL, a.browserVideos.get(pageURL))
 	if err != nil {
 		return VideoLookUp{}, err
 	}
@@ -219,6 +220,10 @@ type MediaRow struct {
 	Title    string              `json:"title"`
 	URL      string              `json:"url"`
 	Progress tools.VideoProgress `json:"progress"`
+	// Dir is the folder it is saved in; Started when it began (the list's
+	// order and "added" column).
+	Dir     string    `json:"dir"`
+	Started time.Time `json:"started"`
 }
 
 type mediaJob interface {
@@ -300,11 +305,12 @@ func (a *App) StartVideoDownload(req VideoRequest) (MediaRow, error) {
 	ffmpeg, _ := a.helper(tools.HelperFfmpeg)
 	job, err := tools.StartVideo(tools.VideoOptions{Exe: ytdlp.Exe, URL: req.URL, Selector: req.Choice.Selector,
 		Dir: dir, Stem: stem, Ffmpeg: ffmpeg.Exe, Expected: req.Choice.Size, Subs: req.Subs,
-		Client: network.NewClient(a.helperNetwork())})
+		Browser: a.browserVideos.get(req.URL),
+		Client:  network.NewClient(a.helperNetwork())})
 	if err != nil {
 		return MediaRow{}, err
 	}
-	return a.track(&mediaEntry{row: MediaRow{ID: uuid.NewString(), Kind: "video", Title: req.Title, URL: req.URL}, job: job}), nil
+	return a.track(&mediaEntry{row: MediaRow{ID: uuid.NewString(), Kind: "video", Title: req.Title, URL: req.URL, Dir: dir}, job: job}), nil
 }
 
 // StartGalleryDownload downloads a gallery into its own folder.
@@ -318,17 +324,19 @@ func (a *App) StartGalleryDownload(req GalleryRequest) (MediaRow, error) {
 		return MediaRow{}, errors.New("gallery-dl is not installed")
 	}
 	name := tools.GalleryName(u)
-	job, err := tools.StartGallery(gallery, req.URL, filepath.Join(a.saveDir(req.Directory), name),
+	dir := filepath.Join(a.saveDir(req.Directory), name)
+	job, err := tools.StartGallery(gallery, req.URL, dir,
 		tools.GalleryAsk{Limit: max(req.Limit, 0)}, tools.FromBrowser{})
 	if err != nil {
 		return MediaRow{}, err
 	}
-	return a.track(&mediaEntry{row: MediaRow{ID: uuid.NewString(), Kind: "gallery", Title: name, URL: req.URL}, job: job}), nil
+	return a.track(&mediaEntry{row: MediaRow{ID: uuid.NewString(), Kind: "gallery", Title: name, URL: req.URL, Dir: dir}, job: job}), nil
 }
 
 // track keeps a media download and tells its progress until it ends.
 func (a *App) track(e *mediaEntry) MediaRow {
 	e.started = time.Now()
+	e.row.Started = e.started
 	a.media.add(e)
 	ctx := a.ctx
 	go func() {
@@ -364,5 +372,57 @@ func (a *App) StopMediaDownload(id string) error {
 		return fmt.Errorf("no download %s", id)
 	}
 	e.job.Stop()
+	return nil
+}
+
+// mediaTarget is a media download's saved file once done (a gallery's
+// folder), else its folder.
+func (m *mediaJobs) target(id string) (string, bool, error) {
+	e, ok := m.get(id)
+	if !ok {
+		return "", false, fmt.Errorf("no download %s", id)
+	}
+	p := e.job.Progress()
+	if p.State == tools.VideoDone && p.File != "" {
+		return p.File, true, nil
+	}
+	return e.row.Dir, p.State == tools.VideoDone, nil
+}
+
+// OpenMediaFile opens a finished video (a gallery's folder).
+func (a *App) OpenMediaFile(id string) error {
+	path, done, err := a.media.target(id)
+	if err != nil {
+		return err
+	}
+	if !done {
+		return errors.New("the download has not finished yet")
+	}
+	return platform.OpenPath(path)
+}
+
+// ShowMediaInFolder shows a video or gallery download in the file manager.
+func (a *App) ShowMediaInFolder(id string) error {
+	path, _, err := a.media.target(id)
+	if err != nil {
+		return err
+	}
+	if _, statErr := os.Stat(path); statErr != nil {
+		path = filepath.Dir(path)
+	}
+	return platform.RevealPath(path)
+}
+
+// RemoveMediaDownload takes a video or gallery download off the list,
+// stopping it first; what was saved stays.
+func (a *App) RemoveMediaDownload(id string) error {
+	e, ok := a.media.get(id)
+	if !ok {
+		return fmt.Errorf("no download %s", id)
+	}
+	e.job.Stop()
+	a.media.mu.Lock()
+	delete(a.media.jobs, id)
+	a.media.mu.Unlock()
 	return nil
 }

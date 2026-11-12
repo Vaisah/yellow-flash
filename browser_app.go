@@ -91,8 +91,6 @@ func unsupportedFromBrowser(cmd ipc.Command) string {
 		return "a private window's download"
 	case cmd.Post != "":
 		return "a form's download (POST)"
-	case cmd.VideoPage != "":
-		return "a video page"
 	case len(cmd.Links) > 0:
 		return "a list of links"
 	}

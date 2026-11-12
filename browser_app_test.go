@@ -62,7 +62,6 @@ func TestBrowserCommandsTheAppCannotDoAreRefused(t *testing.T) {
 	for _, cmd := range []ipc.Command{
 		{Browser: true, URL: "https://x.test/a.zip", Private: true},
 		{Browser: true, URL: "https://x.test/get", Post: "a=1"},
-		{Browser: true, VideoPage: "https://tube.test/watch"},
 		{Browser: true, Links: []string{"https://x.test/a.zip"}},
 	} {
 		if unsupportedFromBrowser(cmd) == "" || a.handleCommand(ipc.Incoming{Cmd: cmd}) {
@@ -72,7 +71,8 @@ func TestBrowserCommandsTheAppCannotDoAreRefused(t *testing.T) {
 	for _, cmd := range []ipc.Command{
 		{Browser: true, URL: "https://x.test/a.zip", Cookies: "a=1"},
 		{Browser: true, ExcludeSite: "x.test"},
-		{URL: "https://x.test/get", Post: "a=1"}, // not from the browser: the command line's
+		{Browser: true, VideoPage: "https://tube.test/watch"}, // the Download video window
+		{URL: "https://x.test/get", Post: "a=1"},              // not from the browser: the command line's
 	} {
 		if !a.handleCommand(ipc.Incoming{Cmd: cmd}) {
 			t.Errorf("refused: %+v", cmd)

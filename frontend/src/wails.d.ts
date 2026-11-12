@@ -69,6 +69,9 @@ export interface AppBindings {
   }): Promise<MediaRow>
   ListMediaDownloads(): Promise<MediaRow[]>
   StopMediaDownload(id: string): Promise<void>
+  OpenMediaFile(id: string): Promise<void>
+  ShowMediaInFolder(id: string): Promise<void>
+  RemoveMediaDownload(id: string): Promise<void>
 }
 
 declare global {

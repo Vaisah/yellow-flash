@@ -273,9 +273,12 @@ export function installMockBackend() {
     LookUpVideo: () => later({ title: 'A video (browser preview)', duration: 213, needsFfmpeg: false, subs: [],
       choices: [{ label: 'Best (1080p)', selector: 'b', ext: 'mp4', size: 85 * MB }, { label: 'Audio only (MP3)', selector: 'mp3', ext: 'mp3', size: 8 * MB }] }, 600),
     StartVideoDownload: (req) => later({ id: `m${Date.now()}`, kind: 'video' as const, title: req.title, url: req.url,
-      progress: { state: 'running' as const, downloaded: 0, total: 0, speed: 0 } }),
+      progress: { state: 'running' as const, downloaded: 0, total: 0, speed: 0 }, dir: '', started: new Date().toISOString() }),
     ListMediaDownloads: () => later([]),
     StopMediaDownload: async () => undefined,
+    OpenMediaFile: async () => undefined,
+    ShowMediaInFolder: async () => undefined,
+    RemoveMediaDownload: async () => undefined,
   }
 
   const app: AppBindings = {

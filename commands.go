@@ -91,6 +91,9 @@ func (a *App) dispatch(ctx context.Context, in ipc.Incoming) {
 	case cmd.ExcludeSite != "" || cmd.PanelHideSite != "":
 		a.browserSite(ctx, cmd)
 		return
+	case cmd.VideoPage != "":
+		a.videoFromBrowser(ctx, cmd)
+		return
 	}
 	if a.ready() != nil {
 		a.notice(ctx, "error", "Yellow Flash is not ready to add downloads")

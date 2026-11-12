@@ -762,6 +762,9 @@ export namespace main {
 	    title: string;
 	    url: string;
 	    progress: tools.VideoProgress;
+	    dir: string;
+	    // Go type: time
+	    started: any;
 	
 	    static createFrom(source: any = {}) {
 	        return new MediaRow(source);
@@ -774,6 +777,8 @@ export namespace main {
 	        this.title = source["title"];
 	        this.url = source["url"];
 	        this.progress = this.convertValues(source["progress"], tools.VideoProgress);
+	        this.dir = source["dir"];
+	        this.started = this.convertValues(source["started"], null);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
